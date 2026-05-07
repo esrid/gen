@@ -44,6 +44,12 @@ func runScaffold(args []string) error {
 		{p.handlerFile(model), genHandlerFile(p.Module, model)},
 	}
 
+	// Ensure JSON helpers exist before creating the handler (generated handler
+	// calls respondJSON/decodeJSON which live in this file).
+	if _, err := createIfAbsent(p.jsonHelpersFile(), genJSONHelpersFile()); err != nil {
+		return err
+	}
+
 	anyCreated := false
 	for _, f := range codeFiles {
 		created, err := createIfAbsent(f.path, f.content)

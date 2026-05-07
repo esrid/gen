@@ -414,6 +414,48 @@ func genAlterMigration(model string, addFields []Field) string {
 	return sb.String()
 }
 
+// ── HTTP JSON helpers (generated once per project) ────────────────────────────
+
+// genJSONHelpersFile returns the content of internal/adapters/http/json.go.
+// respondJSON marshals to a buffer before writing headers so a marshal error
+// can still be reported as 500 (100go #53: handle errors, don't silently drop).
+func genJSONHelpersFile() string {
+	return `package http
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"sync"
+)
+
+var bufPool = sync.Pool{
+	New: func() any { return new(bytes.Buffer) },
+}
+
+func respondJSON(w http.ResponseWriter, status int, v any) {
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufPool.Put(buf)
+	if err := json.NewEncoder(buf).Encode(v); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(buf.Bytes())
+}
+
+func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+`
+}
+
 // ── SQL builder helpers ───────────────────────────────────────────────────────
 
 // buildSelectCols returns "id, col1, col2, ..., created_at, updated_at".

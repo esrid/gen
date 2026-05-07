@@ -130,6 +130,10 @@ func (p *Project) handlerFile(model string) string {
 	return filepath.Join(p.Root, "internal", "adapters", "http", toSnakeCase(model)+"_handler.go")
 }
 
+func (p *Project) jsonHelpersFile() string {
+	return filepath.Join(p.Root, "internal", "adapters", "http", "json.go")
+}
+
 func (p *Project) migrationFile(n int, label string) string {
 	return filepath.Join(p.Root, "internal", "adapters", "store", "migrations",
 		fmt.Sprintf("%05d_%s.sql", n, toSnakeCase(label)))
