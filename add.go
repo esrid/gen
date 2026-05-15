@@ -72,7 +72,7 @@ func runAdd(args []string) error {
 
 	// 2. Update store file.
 	storePath := p.storeFile(model)
-	if err := updateStoreFile(storePath, p.Module, model, allUserFields); err != nil {
+	if err := updateStoreFile(storePath, p.Module, model, allUserFields, p.Driver); err != nil {
 		return fmt.Errorf("update store: %w", err)
 	}
 
@@ -81,8 +81,12 @@ func runAdd(args []string) error {
 	if err != nil {
 		return err
 	}
-	migPath := p.migrationFile(n, "add_to_"+toSnakeCase(model))
-	if _, err := createIfAbsent(migPath, genAlterMigration(model, addFields)); err != nil {
+	addDBNames := make([]string, len(addFields))
+	for i, f := range addFields {
+		addDBNames[i] = f.DBName
+	}
+	migPath := p.migrationFile(n, "add_"+migFieldToken(addDBNames)+"_to_"+tableOf(model))
+	if _, err := createIfAbsent(migPath, genAlterMigration(model, addFields, p.Driver)); err != nil {
 		return err
 	}
 
@@ -172,12 +176,12 @@ func insertBeforeStructClose(content, model string, fields []Field) (string, err
 // updateStoreFile regenerates the gen:begin/end section in the store file.
 // If the file has no markers, it prints a notice instead of touching user code.
 // If the file does not exist, it is created from scratch.
-func updateStoreFile(path, module, model string, allUserFields []Field) error {
+func updateStoreFile(path, module, model string, allUserFields []Field, driver string) error {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
 		}
-		content := genStoreFile(module, model, allUserFields)
+		content := genStoreFile(module, model, allUserFields, driver)
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			return err
 		}
@@ -204,7 +208,7 @@ func updateStoreFile(path, module, model string, allUserFields []Field) error {
 		return nil
 	}
 
-	updated := replaceSection(content, model, genStoreSection(model, allUserFields))
+	updated := replaceSection(content, model, genStoreSection(model, allUserFields, driver))
 	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
 		return err
 	}

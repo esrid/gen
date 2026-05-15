@@ -280,7 +280,18 @@ func genHandlerFile(module, model string) string {
 
 // ── Store ─────────────────────────────────────────────────────────────────────
 
-func genStoreSection(model string, userFields []Field) string {
+func genStoreSection(model string, userFields []Field, driver string) string {
+	switch driver {
+	case "sqlite":
+		return genStoreSectionSQLite(model, userFields)
+	case "pgx":
+		return genStoreSectionPgx(model, userFields)
+	default:
+		panic("unknown driver: " + driver)
+	}
+}
+
+func genStoreSectionPgx(model string, userFields []Field) string {
 	table := tableOf(model)
 	plural := pluralPascal(model)
 
@@ -368,48 +379,209 @@ func genStoreSection(model string, userFields []Field) string {
 	return wrapSection(model, sb.String())
 }
 
-func genStoreFile(module, model string, userFields []Field) string {
+// ── SQLite store helpers ───────────────────────────────────────────────────────
+
+func scanPtrList(userFields []Field) string {
+	parts := []string{"&p.ID"}
+	for _, f := range userFields {
+		parts = append(parts, "&p."+f.GoName)
+	}
+	parts = append(parts, "&p.CreatedAt", "&p.UpdatedAt")
+	return strings.Join(parts, ", ")
+}
+
+func insertColsSQLite(userFields []Field) string {
+	cols := make([]string, 0, 1+len(userFields))
+	cols = append(cols, "id")
+	for _, f := range userFields {
+		cols = append(cols, f.DBName)
+	}
+	return strings.Join(cols, ", ")
+}
+
+func questionMarks(n int) string {
+	parts := make([]string, n)
+	for i := range parts {
+		parts[i] = "?"
+	}
+	return strings.Join(parts, ", ")
+}
+
+func updateSetSQLite(fields []Field) string {
+	parts := make([]string, len(fields))
+	for i, f := range fields {
+		parts[i] = f.DBName + " = ?"
+	}
+	return strings.Join(parts, ", ")
+}
+
+// pgToSQLiteType maps a PostgreSQL SQL column definition to its SQLite equivalent.
+// strings.NewReplacer does a single left-to-right pass; specific patterns must be
+// listed before their substrings so the longer match wins at each position.
+var sqliteTypeReplacer = strings.NewReplacer(
+	"BIGINT NOT NULL DEFAULT 0", "INTEGER NOT NULL DEFAULT 0",
+	"DOUBLE PRECISION NOT NULL DEFAULT 0", "REAL NOT NULL DEFAULT 0",
+	"BOOLEAN NOT NULL DEFAULT FALSE", "INTEGER NOT NULL DEFAULT 0",
+	"TIMESTAMPTZ NOT NULL DEFAULT NOW()", "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
+	"JSONB NOT NULL DEFAULT '{}'", "TEXT NOT NULL DEFAULT '{}'",
+	"BIGINT", "INTEGER",
+	"DOUBLE PRECISION", "REAL",
+	"BOOLEAN", "INTEGER",
+	"TIMESTAMPTZ", "DATETIME",
+	"JSONB", "TEXT",
+	"DEFAULT NOW()", "DEFAULT CURRENT_TIMESTAMP",
+	"DEFAULT FALSE", "DEFAULT 0",
+	"DEFAULT TRUE", "DEFAULT 1",
+)
+
+func pgToSQLiteType(s string) string {
+	return sqliteTypeReplacer.Replace(s)
+}
+
+func genStoreSectionSQLite(model string, userFields []Field) string {
+	table := tableOf(model)
+	plural := pluralPascal(model)
+	selectCols := buildSelectCols(userFields)
+	scanPtrs := scanPtrList(userFields)
+
+	var sb strings.Builder
+
+	// Create
+	sb.WriteString(fmt.Sprintf("func (s *Store) Create%s(ctx context.Context, p domain.%s) (*domain.%s, error) {\n", model, model, model))
+	sb.WriteString("\tid := newID()\n")
+	if len(userFields) == 0 {
+		sb.WriteString(fmt.Sprintf("\t_, err := s.db.ExecContext(ctx,\n\t\t`INSERT INTO %s (id) VALUES (?)`,\n\t\tid,\n\t)\n", table))
+	} else {
+		sb.WriteString(fmt.Sprintf("\t_, err := s.db.ExecContext(ctx,\n\t\t`INSERT INTO %s (%s) VALUES (%s)`,\n\t\tid,\n", table, insertColsSQLite(userFields), questionMarks(1+len(userFields))))
+		for _, f := range userFields {
+			sb.WriteString(fmt.Sprintf("\t\tp.%s,\n", f.GoName))
+		}
+		sb.WriteString("\t)\n")
+	}
+	sb.WriteString("\tif err != nil {\n")
+	sb.WriteString(fmt.Sprintf("\t\treturn nil, DecorateError(err, \"Create%s\")\n", model))
+	sb.WriteString("\t}\n")
+	sb.WriteString(fmt.Sprintf("\treturn s.%sByID(ctx, id)\n", model))
+	sb.WriteString("}\n\n")
+
+	// ByID
+	sb.WriteString(fmt.Sprintf("func (s *Store) %sByID(ctx context.Context, id string) (*domain.%s, error) {\n", model, model))
+	sb.WriteString(fmt.Sprintf("\trow := s.db.QueryRowContext(ctx,\n\t\t`SELECT %s FROM %s WHERE id = ?`,\n\t\tid,\n\t)\n", selectCols, table))
+	sb.WriteString(fmt.Sprintf("\tvar p domain.%s\n", model))
+	sb.WriteString(fmt.Sprintf("\terr := row.Scan(%s)\n", scanPtrs))
+	sb.WriteString("\tif errors.Is(err, sql.ErrNoRows) {\n")
+	sb.WriteString(fmt.Sprintf("\t\treturn nil, domain.Err%sNotFound\n", model))
+	sb.WriteString("\t}\n")
+	sb.WriteString(fmt.Sprintf("\treturn &p, DecorateError(err, \"%sByID\")\n", model))
+	sb.WriteString("}\n\n")
+
+	// Update
+	sb.WriteString(fmt.Sprintf("func (s *Store) Update%s(ctx context.Context, p domain.%s) error {\n", model, model))
+	if len(userFields) == 0 {
+		sb.WriteString(fmt.Sprintf("\t_, err := s.db.ExecContext(ctx,\n\t\t`UPDATE %s SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`,\n\t\tp.ID,\n\t)\n", table))
+	} else {
+		sb.WriteString(fmt.Sprintf("\t_, err := s.db.ExecContext(ctx,\n\t\t`UPDATE %s SET %s, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,\n", table, updateSetSQLite(userFields)))
+		for _, f := range userFields {
+			sb.WriteString(fmt.Sprintf("\t\tp.%s,\n", f.GoName))
+		}
+		sb.WriteString("\t\tp.ID,\n\t)\n")
+	}
+	sb.WriteString(fmt.Sprintf("\treturn DecorateError(err, \"Update%s\")\n", model))
+	sb.WriteString("}\n\n")
+
+	// Delete
+	sb.WriteString(fmt.Sprintf("func (s *Store) Delete%s(ctx context.Context, id string) error {\n", model))
+	sb.WriteString(fmt.Sprintf("\t_, err := s.db.ExecContext(ctx,\n\t\t`DELETE FROM %s WHERE id = ?`,\n\t\tid,\n\t)\n", table))
+	sb.WriteString(fmt.Sprintf("\treturn DecorateError(err, \"Delete%s\")\n", model))
+	sb.WriteString("}\n\n")
+
+	// List
+	sb.WriteString(fmt.Sprintf("func (s *Store) List%s(ctx context.Context) ([]domain.%s, error) {\n", plural, model))
+	sb.WriteString(fmt.Sprintf("\trows, err := s.db.QueryContext(ctx,\n\t\t`SELECT %s FROM %s ORDER BY created_at DESC`,\n\t)\n", selectCols, table))
+	sb.WriteString("\tif err != nil {\n")
+	sb.WriteString(fmt.Sprintf("\t\treturn nil, DecorateError(err, \"List%s\")\n", plural))
+	sb.WriteString("\t}\n")
+	sb.WriteString(fmt.Sprintf("\treturn collectRows(rows, func(r *sql.Rows) (domain.%s, error) {\n", model))
+	sb.WriteString(fmt.Sprintf("\t\tvar p domain.%s\n", model))
+	sb.WriteString(fmt.Sprintf("\t\terr := r.Scan(%s)\n", scanPtrs))
+	sb.WriteString("\t\treturn p, err\n")
+	sb.WriteString("\t})\n")
+	sb.WriteString("}\n")
+
+	return wrapSection(model, sb.String())
+}
+
+func genStoreFile(module, model string, userFields []Field, driver string) string {
 	var sb strings.Builder
 	sb.WriteString("package store\n\n")
-	sb.WriteString("import (\n")
-	sb.WriteString("\t\"context\"\n")
-	sb.WriteString("\t\"errors\"\n\n")
-	sb.WriteString(fmt.Sprintf("\t%q\n\n", module+"/internal/core/domain"))
-	sb.WriteString("\t\"github.com/jackc/pgx/v5\"\n")
-	sb.WriteString(")\n\n")
-	sb.WriteString(genStoreSection(model, userFields))
+	if driver == "sqlite" {
+		sb.WriteString("import (\n")
+		sb.WriteString("\t\"context\"\n")
+		sb.WriteString("\t\"database/sql\"\n")
+		sb.WriteString("\t\"errors\"\n\n")
+		sb.WriteString(fmt.Sprintf("\t%q\n", module+"/internal/core/domain"))
+		sb.WriteString(")\n\n")
+	} else {
+		sb.WriteString("import (\n")
+		sb.WriteString("\t\"context\"\n")
+		sb.WriteString("\t\"errors\"\n\n")
+		sb.WriteString(fmt.Sprintf("\t%q\n\n", module+"/internal/core/domain"))
+		sb.WriteString("\t\"github.com/jackc/pgx/v5\"\n")
+		sb.WriteString(")\n\n")
+	}
+	sb.WriteString(genStoreSection(model, userFields, driver))
 	return sb.String()
 }
 
 // ── Migration ─────────────────────────────────────────────────────────────────
 
-func genCreateMigration(model string, userFields []Field) string {
+func genCreateMigration(model string, userFields []Field, driver string) string {
 	table := tableOf(model)
 	var sb strings.Builder
 	sb.WriteString("-- +goose Up\n")
 	sb.WriteString(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (\n", table))
-	sb.WriteString(fmt.Sprintf("  %-14s TEXT        PRIMARY KEY DEFAULT uuidv7()::text,\n", "id"))
-	for _, f := range userFields {
-		sb.WriteString(fmt.Sprintf("  %-14s %s,\n", f.DBName, f.SQLType))
+	if driver == "sqlite" {
+		sb.WriteString(fmt.Sprintf("  %-14s TEXT        PRIMARY KEY,\n", "id"))
+		for _, f := range userFields {
+			sb.WriteString(fmt.Sprintf("  %-14s %s,\n", f.DBName, pgToSQLiteType(f.SQLType)))
+		}
+		sb.WriteString(fmt.Sprintf("  %-14s DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,\n", "created_at"))
+		sb.WriteString(fmt.Sprintf("  %-14s DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP\n", "updated_at"))
+	} else {
+		sb.WriteString(fmt.Sprintf("  %-14s TEXT        PRIMARY KEY DEFAULT uuidv7()::text,\n", "id"))
+		for _, f := range userFields {
+			sb.WriteString(fmt.Sprintf("  %-14s %s,\n", f.DBName, f.SQLType))
+		}
+		sb.WriteString(fmt.Sprintf("  %-14s TIMESTAMPTZ NOT NULL DEFAULT NOW(),\n", "created_at"))
+		sb.WriteString(fmt.Sprintf("  %-14s TIMESTAMPTZ NOT NULL DEFAULT NOW()\n", "updated_at"))
 	}
-	sb.WriteString(fmt.Sprintf("  %-14s TIMESTAMPTZ NOT NULL DEFAULT NOW(),\n", "created_at"))
-	sb.WriteString(fmt.Sprintf("  %-14s TIMESTAMPTZ NOT NULL DEFAULT NOW()\n", "updated_at"))
 	sb.WriteString(");\n")
 	sb.WriteString("\n-- +goose Down\n")
 	sb.WriteString(fmt.Sprintf("DROP TABLE IF EXISTS %s;\n", table))
 	return sb.String()
 }
 
-func genAlterMigration(model string, addFields []Field) string {
+func genAlterMigration(model string, addFields []Field, driver string) string {
 	table := tableOf(model)
 	var sb strings.Builder
 	sb.WriteString("-- +goose Up\n")
-	for _, f := range addFields {
-		sb.WriteString(fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS %-14s %s;\n", table, f.DBName, f.SQLType))
-	}
-	sb.WriteString("\n-- +goose Down\n")
-	for _, f := range addFields {
-		sb.WriteString(fmt.Sprintf("ALTER TABLE %s DROP COLUMN IF EXISTS %s;\n", table, f.DBName))
+	if driver == "sqlite" {
+		for _, f := range addFields {
+			sb.WriteString(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %-14s %s;\n", table, f.DBName, pgToSQLiteType(f.SQLType)))
+		}
+		sb.WriteString("\n-- +goose Down\n")
+		sb.WriteString("-- requires SQLite >= 3.35.0\n")
+		for _, f := range addFields {
+			sb.WriteString(fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;\n", table, f.DBName))
+		}
+	} else {
+		for _, f := range addFields {
+			sb.WriteString(fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS %-14s %s;\n", table, f.DBName, f.SQLType))
+		}
+		sb.WriteString("\n-- +goose Down\n")
+		for _, f := range addFields {
+			sb.WriteString(fmt.Sprintf("ALTER TABLE %s DROP COLUMN IF EXISTS %s;\n", table, f.DBName))
+		}
 	}
 	return sb.String()
 }

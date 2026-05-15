@@ -89,7 +89,7 @@ func runRemove(args []string) error {
 
 	// 2. Update store file.
 	storePath := p.storeFile(model)
-	if err := updateStoreFile(storePath, p.Module, model, remaining); err != nil {
+	if err := updateStoreFile(storePath, p.Module, model, remaining, p.Driver); err != nil {
 		return fmt.Errorf("update store: %w", err)
 	}
 
@@ -98,8 +98,12 @@ func runRemove(args []string) error {
 	if err != nil {
 		return err
 	}
-	migPath := p.migrationFile(n, "remove_from_"+toSnakeCase(model))
-	migContent := genDropMigration(model, dropped)
+	droppedDBNames := make([]string, len(dropped))
+	for i, pf := range dropped {
+		droppedDBNames[i] = pf.DBName
+	}
+	migPath := p.migrationFile(n, "remove_"+migFieldToken(droppedDBNames)+"_from_"+tableOf(model))
+	migContent := genDropMigration(model, dropped, p.Driver)
 	if _, err := createIfAbsent(migPath, migContent); err != nil {
 		return err
 	}
@@ -109,17 +113,29 @@ func runRemove(args []string) error {
 	return nil
 }
 
-func genDropMigration(model string, dropped []ParsedField) string {
+func genDropMigration(model string, dropped []ParsedField, driver string) string {
 	table := tableOf(model)
 	var sb strings.Builder
 	sb.WriteString("-- +goose Up\n")
-	for _, pf := range dropped {
-		sb.WriteString(fmt.Sprintf("ALTER TABLE %s DROP COLUMN IF EXISTS %s;\n", table, pf.DBName))
-	}
-	sb.WriteString("\n-- +goose Down\n")
-	for _, pf := range dropped {
-		sb.WriteString(fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS %-14s %s;\n",
-			table, pf.DBName, goTypeToSQLType(pf.GoType)))
+	if driver == "sqlite" {
+		sb.WriteString("-- requires SQLite >= 3.35.0\n")
+		for _, pf := range dropped {
+			sb.WriteString(fmt.Sprintf("ALTER TABLE %s DROP COLUMN %s;\n", table, pf.DBName))
+		}
+		sb.WriteString("\n-- +goose Down\n")
+		for _, pf := range dropped {
+			sb.WriteString(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %-14s %s;\n",
+				table, pf.DBName, goTypeToSQLType(pf.GoType)))
+		}
+	} else {
+		for _, pf := range dropped {
+			sb.WriteString(fmt.Sprintf("ALTER TABLE %s DROP COLUMN IF EXISTS %s;\n", table, pf.DBName))
+		}
+		sb.WriteString("\n-- +goose Down\n")
+		for _, pf := range dropped {
+			sb.WriteString(fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS %-14s %s;\n",
+				table, pf.DBName, goTypeToSQLType(pf.GoType)))
+		}
 	}
 	return sb.String()
 }

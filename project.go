@@ -12,6 +12,7 @@ import (
 type Project struct {
 	Root   string
 	Module string
+	Driver string // "pgx" or "sqlite"
 }
 
 // requiredDirs are the directories that must exist for a project to be recognised.
@@ -33,11 +34,11 @@ func detectProject() (*Project, error) {
 			if err := checkProjectStructure(dir); err != nil {
 				return nil, err
 			}
-			mod, err := readModuleName(filepath.Join(dir, "go.mod"))
+			mod, driver, err := readGoMod(filepath.Join(dir, "go.mod"))
 			if err != nil {
 				return nil, err
 			}
-			return &Project{Root: dir, Module: mod}, nil
+			return &Project{Root: dir, Module: mod, Driver: driver}, nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -64,18 +65,36 @@ func checkProjectStructure(root string) error {
 	return nil
 }
 
-func readModuleName(modPath string) (string, error) {
+func readGoMod(modPath string) (module, driver string, err error) {
 	data, err := os.ReadFile(modPath)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	content := string(data)
+	for _, line := range strings.Split(content, "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "module ") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "module ")), nil
+			module = strings.TrimSpace(strings.TrimPrefix(line, "module "))
+			break
 		}
 	}
-	return "", fmt.Errorf("module directive not found in %s", modPath)
+	if module == "" {
+		return "", "", fmt.Errorf("module directive not found in %s", modPath)
+	}
+	driver = "pgx"
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "//") {
+			continue
+		}
+		// strip leading "require " for single-line require directives
+		check := strings.TrimPrefix(trimmed, "require ")
+		if strings.HasPrefix(check, "modernc.org/sqlite") || strings.HasPrefix(check, "mattn/go-sqlite3") {
+			driver = "sqlite"
+			break
+		}
+	}
+	return module, driver, nil
 }
 
 // nextMigrationNumber scans the migrations directory and returns max+1.

@@ -39,7 +39,7 @@ func runScaffold(args []string) error {
 	codeFiles := []genFile{
 		{p.domainFile(model), genDomainFile(model, userFields)},
 		{p.portFile(model), genPortFile(p.Module, model)},
-		{p.storeFile(model), genStoreFile(p.Module, model, userFields)},
+		{p.storeFile(model), genStoreFile(p.Module, model, userFields, p.Driver)},
 		{p.serviceFile(model), genServiceFile(p.Module, model)},
 		{p.handlerFile(model), genHandlerFile(p.Module, model)},
 	}
@@ -63,7 +63,7 @@ func runScaffold(args []string) error {
 
 	if anyCreated {
 		migPath := p.migrationFile(n, "create_"+toSnakeCase(model))
-		if _, err := createIfAbsent(migPath, genCreateMigration(model, userFields)); err != nil {
+		if _, err := createIfAbsent(migPath, genCreateMigration(model, userFields, p.Driver)); err != nil {
 			return err
 		}
 	} else {

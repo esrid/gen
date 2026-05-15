@@ -85,3 +85,16 @@ func pluralPascal(model string) string {
 func tableOf(model string) string {
 	return toPlural(toSnakeCase(model))
 }
+
+// migFieldToken returns the column name for a single-field migration, or "attributes" for multiple.
+// Callers must ensure dbNames is non-empty.
+func migFieldToken(dbNames []string) string {
+	switch len(dbNames) {
+	case 0:
+		return "fields"
+	case 1:
+		return dbNames[0]
+	default:
+		return "attributes"
+	}
+}
