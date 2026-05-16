@@ -57,8 +57,9 @@ func replaceSection(content, model, newSection string) string {
 func genDomainSection(model string, userFields []Field) string {
 	var sb strings.Builder
 
-	// sentinel error
-	sb.WriteString(fmt.Sprintf("var Err%sNotFound = errors.New(%q)\n\n", model, toSnakeCase(model)+" not found"))
+	// sentinel errors
+	sb.WriteString(fmt.Sprintf("var Err%sNotFound = errors.New(%q)\n", model, toSnakeCase(model)+" not found"))
+	sb.WriteString(fmt.Sprintf("var Err%sConflict = errors.New(%q)\n\n", model, toSnakeCase(model)+" conflict"))
 
 	// struct
 	sb.WriteString(fmt.Sprintf("type %s struct {\n", model))
@@ -92,18 +93,18 @@ func genPortSection(model string) string {
 	sb.WriteString(fmt.Sprintf("type %sStore interface {\n", model))
 	sb.WriteString(fmt.Sprintf("\tCreate%s(ctx context.Context, p domain.%s) (*domain.%s, error)\n", model, model, model))
 	sb.WriteString(fmt.Sprintf("\t%sByID(ctx context.Context, id string) (*domain.%s, error)\n", model, model))
-	sb.WriteString(fmt.Sprintf("\tUpdate%s(ctx context.Context, p domain.%s) error\n", model, model))
+	sb.WriteString(fmt.Sprintf("\tUpdate%s(ctx context.Context, p domain.%s) (*domain.%s, error)\n", model, model, model))
 	sb.WriteString(fmt.Sprintf("\tDelete%s(ctx context.Context, id string) error\n", model))
-	sb.WriteString(fmt.Sprintf("\tList%s(ctx context.Context) ([]domain.%s, error)\n", plural, model))
+	sb.WriteString(fmt.Sprintf("\tList%s(ctx context.Context, limit, offset int) ([]domain.%s, error)\n", plural, model))
 	sb.WriteString("}\n\n")
 
 	// Service interface
 	sb.WriteString(fmt.Sprintf("type %sService interface {\n", model))
 	sb.WriteString(fmt.Sprintf("\tCreate%s(ctx context.Context, p domain.%s) (*domain.%s, error)\n", model, model, model))
 	sb.WriteString(fmt.Sprintf("\tGet%s(ctx context.Context, id string) (*domain.%s, error)\n", model, model))
-	sb.WriteString(fmt.Sprintf("\tUpdate%s(ctx context.Context, p domain.%s) error\n", model, model))
+	sb.WriteString(fmt.Sprintf("\tUpdate%s(ctx context.Context, p domain.%s) (*domain.%s, error)\n", model, model, model))
 	sb.WriteString(fmt.Sprintf("\tDelete%s(ctx context.Context, id string) error\n", model))
-	sb.WriteString(fmt.Sprintf("\tList%s(ctx context.Context) ([]domain.%s, error)\n", plural, model))
+	sb.WriteString(fmt.Sprintf("\tList%s(ctx context.Context, limit, offset int) ([]domain.%s, error)\n", plural, model))
 	sb.WriteString("}\n")
 
 	return wrapSection(model, sb.String())
@@ -143,7 +144,7 @@ func genServiceSection(_ string, model string) string {
 	sb.WriteString(fmt.Sprintf("\treturn s.store.%sByID(ctx, id)\n", model))
 	sb.WriteString("}\n\n")
 
-	sb.WriteString(fmt.Sprintf("func (s *%sService) Update%s(ctx context.Context, p domain.%s) error {\n", model, model, model))
+	sb.WriteString(fmt.Sprintf("func (s *%sService) Update%s(ctx context.Context, p domain.%s) (*domain.%s, error) {\n", model, model, model, model))
 	sb.WriteString(fmt.Sprintf("\treturn s.store.Update%s(ctx, p)\n", model))
 	sb.WriteString("}\n\n")
 
@@ -151,8 +152,8 @@ func genServiceSection(_ string, model string) string {
 	sb.WriteString(fmt.Sprintf("\treturn s.store.Delete%s(ctx, id)\n", model))
 	sb.WriteString("}\n\n")
 
-	sb.WriteString(fmt.Sprintf("func (s *%sService) List%s(ctx context.Context) ([]domain.%s, error) {\n", model, plural, model))
-	sb.WriteString(fmt.Sprintf("\treturn s.store.List%s(ctx)\n", plural))
+	sb.WriteString(fmt.Sprintf("func (s *%sService) List%s(ctx context.Context, limit, offset int) ([]domain.%s, error) {\n", model, plural, model))
+	sb.WriteString(fmt.Sprintf("\treturn s.store.List%s(ctx, limit, offset)\n", plural))
 	sb.WriteString("}\n")
 
 	return wrapSection(model, sb.String())
@@ -199,7 +200,24 @@ func genHandlerSection(_ string, model string) string {
 
 	// handleList
 	sb.WriteString(fmt.Sprintf("func (h *%sHandler) handleList(w http.ResponseWriter, r *http.Request) {\n", model))
-	sb.WriteString(fmt.Sprintf("\titems, err := h.svc.List%s(r.Context())\n", plural))
+	sb.WriteString("\tlimit, offset := 100, 0\n")
+	sb.WriteString("\tif v := r.URL.Query().Get(\"limit\"); v != \"\" {\n")
+	sb.WriteString("\t\tn, err := strconv.Atoi(v)\n")
+	sb.WriteString("\t\tif err != nil || n <= 0 || n > 1000 {\n")
+	sb.WriteString("\t\t\thttp.Error(w, \"invalid limit\", http.StatusBadRequest)\n")
+	sb.WriteString("\t\t\treturn\n")
+	sb.WriteString("\t\t}\n")
+	sb.WriteString("\t\tlimit = n\n")
+	sb.WriteString("\t}\n")
+	sb.WriteString("\tif v := r.URL.Query().Get(\"offset\"); v != \"\" {\n")
+	sb.WriteString("\t\tn, err := strconv.Atoi(v)\n")
+	sb.WriteString("\t\tif err != nil || n < 0 {\n")
+	sb.WriteString("\t\t\thttp.Error(w, \"invalid offset\", http.StatusBadRequest)\n")
+	sb.WriteString("\t\t\treturn\n")
+	sb.WriteString("\t\t}\n")
+	sb.WriteString("\t\toffset = n\n")
+	sb.WriteString("\t}\n")
+	sb.WriteString(fmt.Sprintf("\titems, err := h.svc.List%s(r.Context(), limit, offset)\n", plural))
 	sb.WriteString("\tif err != nil {\n")
 	sb.WriteString(fmt.Sprintf("\t\th.logger.ErrorContext(r.Context(), \"list %s\", \"err\", err)\n", toSnakeCase(model)))
 	sb.WriteString("\t\thttp.Error(w, \"internal error\", http.StatusInternalServerError)\n")
@@ -216,8 +234,12 @@ func genHandlerSection(_ string, model string) string {
 	sb.WriteString("\t}\n")
 	sb.WriteString(fmt.Sprintf("\tresult, err := h.svc.Create%s(r.Context(), %s)\n", model, lower))
 	sb.WriteString("\tif err != nil {\n")
-	sb.WriteString(fmt.Sprintf("\t\th.logger.ErrorContext(r.Context(), \"create %s\", \"err\", err)\n", toSnakeCase(model)))
-	sb.WriteString("\t\thttp.Error(w, err.Error(), http.StatusUnprocessableEntity)\n")
+	sb.WriteString(fmt.Sprintf("\t\tif errors.Is(err, domain.Err%sConflict) {\n", model))
+	sb.WriteString("\t\t\thttp.Error(w, \"conflict\", http.StatusConflict)\n")
+	sb.WriteString("\t\t} else {\n")
+	sb.WriteString(fmt.Sprintf("\t\t\th.logger.ErrorContext(r.Context(), \"create %s\", \"err\", err)\n", toSnakeCase(model)))
+	sb.WriteString("\t\t\thttp.Error(w, \"internal error\", http.StatusInternalServerError)\n")
+	sb.WriteString("\t\t}\n")
 	sb.WriteString("\t\treturn\n")
 	sb.WriteString("\t}\n")
 	sb.WriteString("\trespondJSON(w, http.StatusCreated, result)\n")
@@ -228,7 +250,12 @@ func genHandlerSection(_ string, model string) string {
 	sb.WriteString("\tid := chi.URLParam(r, \"id\")\n")
 	sb.WriteString(fmt.Sprintf("\titem, err := h.svc.Get%s(r.Context(), id)\n", model))
 	sb.WriteString("\tif err != nil {\n")
-	sb.WriteString("\t\thttp.Error(w, \"not found\", http.StatusNotFound)\n")
+	sb.WriteString(fmt.Sprintf("\t\tif errors.Is(err, domain.Err%sNotFound) {\n", model))
+	sb.WriteString("\t\t\thttp.Error(w, \"not found\", http.StatusNotFound)\n")
+	sb.WriteString("\t\t} else {\n")
+	sb.WriteString(fmt.Sprintf("\t\t\th.logger.ErrorContext(r.Context(), \"get %s\", \"id\", id, \"err\", err)\n", toSnakeCase(model)))
+	sb.WriteString("\t\t\thttp.Error(w, \"internal error\", http.StatusInternalServerError)\n")
+	sb.WriteString("\t\t}\n")
 	sb.WriteString("\t\treturn\n")
 	sb.WriteString("\t}\n")
 	sb.WriteString("\trespondJSON(w, http.StatusOK, item)\n")
@@ -242,20 +269,29 @@ func genHandlerSection(_ string, model string) string {
 	sb.WriteString("\t\treturn\n")
 	sb.WriteString("\t}\n")
 	sb.WriteString(fmt.Sprintf("\t%s.ID = id\n", lower))
-	sb.WriteString(fmt.Sprintf("\tif err := h.svc.Update%s(r.Context(), %s); err != nil {\n", model, lower))
-	sb.WriteString(fmt.Sprintf("\t\th.logger.ErrorContext(r.Context(), \"update %s\", \"id\", id, \"err\", err)\n", toSnakeCase(model)))
-	sb.WriteString("\t\thttp.Error(w, err.Error(), http.StatusUnprocessableEntity)\n")
+	sb.WriteString(fmt.Sprintf("\tresult, err := h.svc.Update%s(r.Context(), %s)\n", model, lower))
+	sb.WriteString("\tif err != nil {\n")
+	sb.WriteString(fmt.Sprintf("\t\tif errors.Is(err, domain.Err%sNotFound) {\n", model))
+	sb.WriteString("\t\t\thttp.Error(w, \"not found\", http.StatusNotFound)\n")
+	sb.WriteString("\t\t} else {\n")
+	sb.WriteString(fmt.Sprintf("\t\t\th.logger.ErrorContext(r.Context(), \"update %s\", \"id\", id, \"err\", err)\n", toSnakeCase(model)))
+	sb.WriteString("\t\t\thttp.Error(w, \"internal error\", http.StatusInternalServerError)\n")
+	sb.WriteString("\t\t}\n")
 	sb.WriteString("\t\treturn\n")
 	sb.WriteString("\t}\n")
-	sb.WriteString(fmt.Sprintf("\trespondJSON(w, http.StatusOK, %s)\n", lower))
+	sb.WriteString("\trespondJSON(w, http.StatusOK, result)\n")
 	sb.WriteString("}\n\n")
 
 	// handleDelete
 	sb.WriteString(fmt.Sprintf("func (h *%sHandler) handleDelete(w http.ResponseWriter, r *http.Request) {\n", model))
 	sb.WriteString("\tid := chi.URLParam(r, \"id\")\n")
 	sb.WriteString(fmt.Sprintf("\tif err := h.svc.Delete%s(r.Context(), id); err != nil {\n", model))
-	sb.WriteString(fmt.Sprintf("\t\th.logger.ErrorContext(r.Context(), \"delete %s\", \"id\", id, \"err\", err)\n", toSnakeCase(model)))
-	sb.WriteString("\t\thttp.Error(w, err.Error(), http.StatusBadRequest)\n")
+	sb.WriteString(fmt.Sprintf("\t\tif errors.Is(err, domain.Err%sNotFound) {\n", model))
+	sb.WriteString("\t\t\thttp.Error(w, \"not found\", http.StatusNotFound)\n")
+	sb.WriteString("\t\t} else {\n")
+	sb.WriteString(fmt.Sprintf("\t\t\th.logger.ErrorContext(r.Context(), \"delete %s\", \"id\", id, \"err\", err)\n", toSnakeCase(model)))
+	sb.WriteString("\t\t\thttp.Error(w, \"internal error\", http.StatusInternalServerError)\n")
+	sb.WriteString("\t\t}\n")
 	sb.WriteString("\t\treturn\n")
 	sb.WriteString("\t}\n")
 	sb.WriteString("\tw.WriteHeader(http.StatusNoContent)\n")
@@ -268,8 +304,10 @@ func genHandlerFile(module, model string) string {
 	var sb strings.Builder
 	sb.WriteString("package http\n\n")
 	sb.WriteString("import (\n")
+	sb.WriteString("\t\"errors\"\n")
 	sb.WriteString("\t\"log/slog\"\n")
-	sb.WriteString("\t\"net/http\"\n\n")
+	sb.WriteString("\t\"net/http\"\n")
+	sb.WriteString("\t\"strconv\"\n\n")
 	sb.WriteString(fmt.Sprintf("\t%q\n", module+"/internal/core/domain"))
 	sb.WriteString(fmt.Sprintf("\t%q\n\n", module+"/internal/core/ports"))
 	sb.WriteString("\t\"github.com/go-chi/chi/v5\"\n")
@@ -320,7 +358,14 @@ func genStoreSectionPgx(model string, userFields []Field) string {
 	sb.WriteString(fmt.Sprintf("\t\treturn nil, DecorateError(err, \"Create%s\")\n", model))
 	sb.WriteString("\t}\n")
 	sb.WriteString(fmt.Sprintf("\tresult, err := pgx.CollectOneRow(rows, pgx.RowToAddrOfStructByName[domain.%s])\n", model))
-	sb.WriteString(fmt.Sprintf("\treturn result, DecorateError(err, \"Create%s\")\n", model))
+	sb.WriteString("\tif err != nil {\n")
+	sb.WriteString("\t\tvar pgErr *pgconn.PgError\n")
+	sb.WriteString("\t\tif errors.As(err, &pgErr) && pgErr.Code == \"23505\" {\n")
+	sb.WriteString(fmt.Sprintf("\t\t\treturn nil, domain.Err%sConflict\n", model))
+	sb.WriteString("\t\t}\n")
+	sb.WriteString(fmt.Sprintf("\t\treturn nil, DecorateError(err, \"Create%s\")\n", model))
+	sb.WriteString("\t}\n")
+	sb.WriteString("\treturn result, nil\n")
 	sb.WriteString("}\n\n")
 
 	// ── ByID ──
@@ -340,35 +385,49 @@ func genStoreSectionPgx(model string, userFields []Field) string {
 	sb.WriteString("}\n\n")
 
 	// ── Update ──
-	sb.WriteString(fmt.Sprintf("func (s *Store) Update%s(ctx context.Context, p domain.%s) error {\n", model, model))
-	sb.WriteString("\t_, err := s.pool.Exec(ctx,\n")
+	sb.WriteString(fmt.Sprintf("func (s *Store) Update%s(ctx context.Context, p domain.%s) (*domain.%s, error) {\n", model, model, model))
+	sb.WriteString("\trows, err := s.pool.Query(ctx,\n")
 	if len(userFields) == 0 {
-		sb.WriteString(fmt.Sprintf("\t\t`UPDATE %s SET updated_at = NOW() WHERE id = $1`,\n", table))
+		sb.WriteString(fmt.Sprintf("\t\t`UPDATE %s SET updated_at = NOW() WHERE id = $1 RETURNING %s`,\n", table, selectCols))
 		sb.WriteString("\t\tp.ID,\n")
 	} else {
-		sb.WriteString(fmt.Sprintf("\t\t`UPDATE %s SET %s, updated_at = NOW() WHERE id = $%d`,\n", table, updateSet, nArgs+1))
+		sb.WriteString(fmt.Sprintf("\t\t`UPDATE %s SET %s, updated_at = NOW() WHERE id = $%d RETURNING %s`,\n", table, updateSet, nArgs+1, selectCols))
 		for _, f := range userFields {
 			sb.WriteString(fmt.Sprintf("\t\tp.%s,\n", f.GoName))
 		}
 		sb.WriteString("\t\tp.ID,\n")
 	}
 	sb.WriteString("\t)\n")
-	sb.WriteString(fmt.Sprintf("\treturn DecorateError(err, \"Update%s\")\n", model))
+	sb.WriteString("\tif err != nil {\n")
+	sb.WriteString(fmt.Sprintf("\t\treturn nil, DecorateError(err, \"Update%s\")\n", model))
+	sb.WriteString("\t}\n")
+	sb.WriteString(fmt.Sprintf("\tresult, err := pgx.CollectOneRow(rows, pgx.RowToAddrOfStructByName[domain.%s])\n", model))
+	sb.WriteString("\tif errors.Is(err, pgx.ErrNoRows) {\n")
+	sb.WriteString(fmt.Sprintf("\t\treturn nil, domain.Err%sNotFound\n", model))
+	sb.WriteString("\t}\n")
+	sb.WriteString(fmt.Sprintf("\treturn result, DecorateError(err, \"Update%s\")\n", model))
 	sb.WriteString("}\n\n")
 
 	// ── Delete ──
 	sb.WriteString(fmt.Sprintf("func (s *Store) Delete%s(ctx context.Context, id string) error {\n", model))
-	sb.WriteString("\t_, err := s.pool.Exec(ctx,\n")
+	sb.WriteString("\ttag, err := s.pool.Exec(ctx,\n")
 	sb.WriteString(fmt.Sprintf("\t\t`DELETE FROM %s WHERE id = $1`,\n", table))
 	sb.WriteString("\t\tid,\n")
 	sb.WriteString("\t)\n")
-	sb.WriteString(fmt.Sprintf("\treturn DecorateError(err, \"Delete%s\")\n", model))
+	sb.WriteString("\tif err != nil {\n")
+	sb.WriteString(fmt.Sprintf("\t\treturn DecorateError(err, \"Delete%s\")\n", model))
+	sb.WriteString("\t}\n")
+	sb.WriteString("\tif tag.RowsAffected() == 0 {\n")
+	sb.WriteString(fmt.Sprintf("\t\treturn domain.Err%sNotFound\n", model))
+	sb.WriteString("\t}\n")
+	sb.WriteString("\treturn nil\n")
 	sb.WriteString("}\n\n")
 
 	// ── List ──
-	sb.WriteString(fmt.Sprintf("func (s *Store) List%s(ctx context.Context) ([]domain.%s, error) {\n", plural, model))
+	sb.WriteString(fmt.Sprintf("func (s *Store) List%s(ctx context.Context, limit, offset int) ([]domain.%s, error) {\n", plural, model))
 	sb.WriteString("\trows, err := s.pool.Query(ctx,\n")
-	sb.WriteString(fmt.Sprintf("\t\t`SELECT %s FROM %s ORDER BY created_at DESC`,\n", selectCols, table))
+	sb.WriteString(fmt.Sprintf("\t\t`SELECT %s FROM %s ORDER BY created_at DESC LIMIT $1 OFFSET $2`,\n", selectCols, table))
+	sb.WriteString("\t\tlimit, offset,\n")
 	sb.WriteString("\t)\n")
 	sb.WriteString("\tif err != nil {\n")
 	sb.WriteString(fmt.Sprintf("\t\treturn nil, DecorateError(err, \"List%s\")\n", plural))
@@ -459,6 +518,9 @@ func genStoreSectionSQLite(model string, userFields []Field) string {
 		sb.WriteString("\t)\n")
 	}
 	sb.WriteString("\tif err != nil {\n")
+	sb.WriteString("\t\tif strings.Contains(err.Error(), \"UNIQUE constraint failed\") {\n")
+	sb.WriteString(fmt.Sprintf("\t\t\treturn nil, domain.Err%sConflict\n", model))
+	sb.WriteString("\t\t}\n")
 	sb.WriteString(fmt.Sprintf("\t\treturn nil, DecorateError(err, \"Create%s\")\n", model))
 	sb.WriteString("\t}\n")
 	sb.WriteString(fmt.Sprintf("\treturn s.%sByID(ctx, id)\n", model))
@@ -476,28 +538,40 @@ func genStoreSectionSQLite(model string, userFields []Field) string {
 	sb.WriteString("}\n\n")
 
 	// Update
-	sb.WriteString(fmt.Sprintf("func (s *Store) Update%s(ctx context.Context, p domain.%s) error {\n", model, model))
+	sb.WriteString(fmt.Sprintf("func (s *Store) Update%s(ctx context.Context, p domain.%s) (*domain.%s, error) {\n", model, model, model))
 	if len(userFields) == 0 {
-		sb.WriteString(fmt.Sprintf("\t_, err := s.db.ExecContext(ctx,\n\t\t`UPDATE %s SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`,\n\t\tp.ID,\n\t)\n", table))
+		sb.WriteString(fmt.Sprintf("\tres, err := s.db.ExecContext(ctx,\n\t\t`UPDATE %s SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`,\n\t\tp.ID,\n\t)\n", table))
 	} else {
-		sb.WriteString(fmt.Sprintf("\t_, err := s.db.ExecContext(ctx,\n\t\t`UPDATE %s SET %s, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,\n", table, updateSetSQLite(userFields)))
+		sb.WriteString(fmt.Sprintf("\tres, err := s.db.ExecContext(ctx,\n\t\t`UPDATE %s SET %s, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,\n", table, updateSetSQLite(userFields)))
 		for _, f := range userFields {
 			sb.WriteString(fmt.Sprintf("\t\tp.%s,\n", f.GoName))
 		}
 		sb.WriteString("\t\tp.ID,\n\t)\n")
 	}
-	sb.WriteString(fmt.Sprintf("\treturn DecorateError(err, \"Update%s\")\n", model))
+	sb.WriteString("\tif err != nil {\n")
+	sb.WriteString(fmt.Sprintf("\t\treturn nil, DecorateError(err, \"Update%s\")\n", model))
+	sb.WriteString("\t}\n")
+	sb.WriteString("\tif n, err2 := res.RowsAffected(); err2 == nil && n == 0 {\n")
+	sb.WriteString(fmt.Sprintf("\t\treturn nil, domain.Err%sNotFound\n", model))
+	sb.WriteString("\t}\n")
+	sb.WriteString(fmt.Sprintf("\treturn s.%sByID(ctx, p.ID)\n", model))
 	sb.WriteString("}\n\n")
 
 	// Delete
 	sb.WriteString(fmt.Sprintf("func (s *Store) Delete%s(ctx context.Context, id string) error {\n", model))
-	sb.WriteString(fmt.Sprintf("\t_, err := s.db.ExecContext(ctx,\n\t\t`DELETE FROM %s WHERE id = ?`,\n\t\tid,\n\t)\n", table))
-	sb.WriteString(fmt.Sprintf("\treturn DecorateError(err, \"Delete%s\")\n", model))
+	sb.WriteString(fmt.Sprintf("\tres, err := s.db.ExecContext(ctx,\n\t\t`DELETE FROM %s WHERE id = ?`,\n\t\tid,\n\t)\n", table))
+	sb.WriteString("\tif err != nil {\n")
+	sb.WriteString(fmt.Sprintf("\t\treturn DecorateError(err, \"Delete%s\")\n", model))
+	sb.WriteString("\t}\n")
+	sb.WriteString("\tif n, err2 := res.RowsAffected(); err2 == nil && n == 0 {\n")
+	sb.WriteString(fmt.Sprintf("\t\treturn domain.Err%sNotFound\n", model))
+	sb.WriteString("\t}\n")
+	sb.WriteString("\treturn nil\n")
 	sb.WriteString("}\n\n")
 
 	// List
-	sb.WriteString(fmt.Sprintf("func (s *Store) List%s(ctx context.Context) ([]domain.%s, error) {\n", plural, model))
-	sb.WriteString(fmt.Sprintf("\trows, err := s.db.QueryContext(ctx,\n\t\t`SELECT %s FROM %s ORDER BY created_at DESC`,\n\t)\n", selectCols, table))
+	sb.WriteString(fmt.Sprintf("func (s *Store) List%s(ctx context.Context, limit, offset int) ([]domain.%s, error) {\n", plural, model))
+	sb.WriteString(fmt.Sprintf("\trows, err := s.db.QueryContext(ctx,\n\t\t`SELECT %s FROM %s ORDER BY created_at DESC LIMIT ? OFFSET ?`,\n\t\tlimit, offset,\n\t)\n", selectCols, table))
 	sb.WriteString("\tif err != nil {\n")
 	sb.WriteString(fmt.Sprintf("\t\treturn nil, DecorateError(err, \"List%s\")\n", plural))
 	sb.WriteString("\t}\n")
@@ -518,7 +592,8 @@ func genStoreFile(module, model string, userFields []Field, driver string) strin
 		sb.WriteString("import (\n")
 		sb.WriteString("\t\"context\"\n")
 		sb.WriteString("\t\"database/sql\"\n")
-		sb.WriteString("\t\"errors\"\n\n")
+		sb.WriteString("\t\"errors\"\n")
+		sb.WriteString("\t\"strings\"\n\n")
 		sb.WriteString(fmt.Sprintf("\t%q\n", module+"/internal/core/domain"))
 		sb.WriteString(")\n\n")
 	} else {
@@ -527,6 +602,7 @@ func genStoreFile(module, model string, userFields []Field, driver string) strin
 		sb.WriteString("\t\"errors\"\n\n")
 		sb.WriteString(fmt.Sprintf("\t%q\n\n", module+"/internal/core/domain"))
 		sb.WriteString("\t\"github.com/jackc/pgx/v5\"\n")
+		sb.WriteString("\t\"github.com/jackc/pgx/v5/pgconn\"\n")
 		sb.WriteString(")\n\n")
 	}
 	sb.WriteString(genStoreSection(model, userFields, driver))
@@ -548,7 +624,7 @@ func genCreateMigration(model string, userFields []Field, driver string) string 
 		sb.WriteString(fmt.Sprintf("  %-14s DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,\n", "created_at"))
 		sb.WriteString(fmt.Sprintf("  %-14s DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP\n", "updated_at"))
 	} else {
-		sb.WriteString(fmt.Sprintf("  %-14s TEXT        PRIMARY KEY DEFAULT uuidv7()::text,\n", "id"))
+		sb.WriteString(fmt.Sprintf("  %-14s UUID        PRIMARY KEY DEFAULT uuid7(),\n", "id"))
 		for _, f := range userFields {
 			sb.WriteString(fmt.Sprintf("  %-14s %s,\n", f.DBName, f.SQLType))
 		}
@@ -556,6 +632,11 @@ func genCreateMigration(model string, userFields []Field, driver string) string 
 		sb.WriteString(fmt.Sprintf("  %-14s TIMESTAMPTZ NOT NULL DEFAULT NOW()\n", "updated_at"))
 	}
 	sb.WriteString(");\n")
+	if driver == "sqlite" {
+		sb.WriteString(fmt.Sprintf("CREATE INDEX %s_created_at_idx ON %s (created_at DESC);\n", table, table))
+	} else {
+		sb.WriteString(fmt.Sprintf("CREATE INDEX ON %s (created_at DESC);\n", table))
+	}
 	sb.WriteString("\n-- +goose Down\n")
 	sb.WriteString(fmt.Sprintf("DROP TABLE IF EXISTS %s;\n", table))
 	return sb.String()
