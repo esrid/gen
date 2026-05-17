@@ -72,16 +72,12 @@ func runScaffold(args []string) error {
 		fmt.Printf("  skip   migration (all files already exist)\n")
 	}
 
-	lower := strings.ToLower(model[:1]) + model[1:]
-	plural := tableOf(model)
-
 	fmt.Println()
+
 	fmt.Println("next steps:")
-	fmt.Printf("  1. Add %sModule to fx.New() in app.go  — 1 line\n", model)
-	fmt.Printf("  2. In router.go, add to NewRouter params + body:\n")
-	fmt.Printf("       %sH *%sHandler\n", lower, model)
-	fmt.Printf("       r.Mount(\"/api/%s\", %sH.Routes())\n", plural, lower)
-	fmt.Printf("  3. Run migrations:  make migrate  (or: goose up)\n")
+	fmt.Printf("  1. Add %sModule to fx.New() in internal/app/app.go  — 1 line\n", model)
+	fmt.Printf("  2. Run migrations:  make migrate\n")
+
 
 	var refFields []Field
 	for _, f := range userFields {
