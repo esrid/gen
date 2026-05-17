@@ -1,17 +1,23 @@
 # gen
 
-Code generator for hexagonal Go/pgx projects.
+Code generator for hexagonal Go projects — supports **pgx** (PostgreSQL) and **database/sql** (SQLite).
 
 Reads your existing code before touching anything. Never overwrites work outside generated sections.
 
-## Install
+## Usage
 
+**Bundled binary** (preferred — each boilerplate ships with `./gen` at project root):
 ```bash
-cd /path/to/gen
-go install .
+./gen scaffold Product name:string price:float
 ```
 
-Run from your project root (where `go.mod` lives). Only works inside projects with the expected hexagonal structure.
+**Global install:**
+```bash
+cd /path/to/gen && go install .
+gen scaffold Product name:string price:float
+```
+
+Run from your project root (where `go.mod` lives). Driver auto-detected from `go.mod` — `modernc.org/sqlite` or `mattn/go-sqlite3` → SQLite, otherwise pgx.
 
 ---
 
@@ -21,14 +27,15 @@ Run from your project root (where `go.mod` lives). Only works inside projects wi
 
 Creates all layers for a new model in one shot:
 
-| File | Path |
+| File | What |
 |------|------|
-| Domain struct + error var | `internal/core/domain/<model>.go` |
-| Store + Service interfaces | `internal/core/ports/<model>.go` |
-| Store CRUD methods | `internal/adapters/store/<model>_store.go` |
-| Service (delegates to store) | `internal/core/services/<model>_service.go` |
-| HTTP handler (JSON REST) | `internal/adapters/http/<model>_handler.go` |
-| CREATE TABLE migration | `internal/adapters/store/migrations/<N>_create_<model>.sql` |
+| `internal/core/domain/<model>.go` | struct (db + json tags) + sentinel errors |
+| `internal/core/ports/<model>.go` | `<Model>Store` + `<Model>Service` interfaces |
+| `internal/adapters/store/<model>_store.go` | CRUD store implementation |
+| `internal/core/services/<model>_service.go` | service layer (delegates to store) |
+| `internal/adapters/http/<model>_handler.go` | JSON REST handler (list/create/get/update/delete) |
+| `internal/app/wire_<model>.go` | `<Model>Module` — fx dependency injection wiring |
+| `internal/adapters/store/migrations/<N>_create_<model>.sql` | goose CREATE TABLE migration |
 
 Auto-adds `id`, `created_at`, `updated_at` to every model. Skips any file that already exists — never overwrites.
 
@@ -121,12 +128,13 @@ Every generated block is wrapped with markers:
 ```go
 // gen:begin Product
 var ErrProductNotFound = errors.New("product not found")
+var ErrProductConflict = errors.New("product conflict")
 
 type Product struct {
-    ID        string    `db:"id"`
-    Name      string    `db:"name"`
-    CreatedAt time.Time `db:"created_at"`
-    UpdatedAt time.Time `db:"updated_at"`
+    ID        string    `db:"id"          json:"id"`
+    Name      string    `db:"name"        json:"name"`
+    CreatedAt time.Time `db:"created_at"  json:"created_at"`
+    UpdatedAt time.Time `db:"updated_at"  json:"updated_at"`
 }
 // gen:end Product
 ```
@@ -148,7 +156,11 @@ internal/core/ports/
 internal/adapters/store/
 ```
 
-Targets **pgx/v5** + **goose** migrations — matches the `boilerplate-pg` layout.
+**Driver auto-detection** (reads `go.mod`):
+- `modernc.org/sqlite` or `mattn/go-sqlite3` → SQLite store (`database/sql`, `?` placeholders, `INTEGER`/`DATETIME` types)
+- anything else → pgx store (`pgxpool`, `$N` placeholders, `UUID`/`TIMESTAMPTZ` types)
+
+Matches the `boilerplate-pg` and `boilerplate-sql` layouts.
 
 ---
 
@@ -158,7 +170,9 @@ Targets **pgx/v5** + **goose** migrations — matches the `boilerplate-pg` layou
 # 1. New model
 gen scaffold Invoice number:string{20} amount:float paid:bool client_id:ref:clients
 
-# 2. Wire up in your App struct, router, etc.
+# 2. Wire up (2 manual lines)
+#    app.go:    add InvoiceModule to fx.New()
+#    router.go: add invoiceH *InvoiceHandler param + r.Mount("/api/invoices", invoiceH.Routes())
 
 # 3. Run migrations
 make migrate
@@ -177,29 +191,29 @@ gen destroy Invoice --force
 goose down -dir ./internal/adapters/store/migrations
 ```
 
-After `scaffold`, three things need manual wiring — `gen` cannot do them because they live in user-owned files with no markers:
+After `scaffold`, two things need manual wiring — `gen` cannot do them because they live in user-owned files with no markers:
 
-**1. `internal/adapters/store/store.go` or wherever your store is composed**
+**1. `internal/app/app.go` — add the module to `fx.New()`**
 ```go
-// nothing to add — Store methods are on the existing *Store type automatically
+fx.New(
+    // ... existing modules
+    InvoiceModule,   // ← add (generated in internal/app/wire_invoice.go)
+)
 ```
 
-**2. `internal/app/app.go` — inject the service**
-```go
-invoiceSvc := services.NewInvoiceService(store, logger)
-```
+`InvoiceModule` is an `fx.Options` block that wires the store interface adapter, service interface adapter, service constructor, and handler constructor — all provided to the fx container automatically.
 
-**3. `internal/adapters/http/router.go` — add the param and mount the route**
+**2. `internal/adapters/http/router.go` — add the handler param and mount the route**
 ```go
 func NewRouter(
-    authSvc ports.AuthService,
-    invoiceSvc ports.InvoiceService,   // ← add
-    logger *slog.Logger,
+    authSvc  ports.AuthService,
+    invoiceH *InvoiceHandler,   // ← add (fx injects from InvoiceModule)
+    logger   *slog.Logger,
 ) http.Handler {
     ...
-    r.Mount("/api/invoices", NewInvoiceHandler(invoiceSvc, logger).Routes())  // ← mount
+    r.Mount("/api/invoices", invoiceH.Routes())   // ← mount
     ...
 }
 ```
 
-The URL prefix, middleware group (public vs auth-required), and whether to use `r.Mount` or `r.Group` are decisions only you can make — that's why `gen` stops here.
+The URL prefix, middleware group (public vs auth-required), and role guards are decisions only you can make — that's why `gen` stops here.
