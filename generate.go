@@ -89,81 +89,73 @@ func genDomainFile(model string, userFields []Field) string {
 
 // ── Port ──────────────────────────────────────────────────────────────────────
 
-func genPortSection(model string) string {
+func genPortSection(model string, userFields []Field) string {
 	plural := pluralPascal(model)
 	var sb strings.Builder
 
 	// Store interface
 	sb.WriteString(fmt.Sprintf("type %sStore interface {\n", model))
+	sb.WriteString(fmt.Sprintf("\tRepository[domain.%s]\n", model))
 	sb.WriteString(fmt.Sprintf("\tCreate%s(ctx context.Context, p domain.%s) (*domain.%s, error)\n", model, model, model))
-	sb.WriteString(fmt.Sprintf("\t%sByID(ctx context.Context, id string) (*domain.%s, error)\n", model, model))
 	sb.WriteString(fmt.Sprintf("\tUpdate%s(ctx context.Context, p domain.%s) (*domain.%s, error)\n", model, model, model))
-	sb.WriteString(fmt.Sprintf("\tDelete%s(ctx context.Context, id string) error\n", model))
-	sb.WriteString(fmt.Sprintf("\tList%s(ctx context.Context, limit, offset int) ([]domain.%s, error)\n", plural, model))
+	for _, f := range userFields {
+		if f.RefTable == "" {
+			continue
+		}
+		param := strings.ToLower(f.GoName[:1]) + f.GoName[1:]
+		sb.WriteString(fmt.Sprintf("\tList%sBy%s(ctx context.Context, %s string, limit, offset int) ([]domain.%s, error)\n", plural, f.GoName, param, model))
+	}
 	sb.WriteString("}\n\n")
 
 	// Service interface
 	sb.WriteString(fmt.Sprintf("type %sService interface {\n", model))
-	sb.WriteString(fmt.Sprintf("\tCreate%s(ctx context.Context, p domain.%s) (*domain.%s, error)\n", model, model, model))
-	sb.WriteString(fmt.Sprintf("\tGet%s(ctx context.Context, id string) (*domain.%s, error)\n", model, model))
-	sb.WriteString(fmt.Sprintf("\tUpdate%s(ctx context.Context, p domain.%s) (*domain.%s, error)\n", model, model, model))
-	sb.WriteString(fmt.Sprintf("\tDelete%s(ctx context.Context, id string) error\n", model))
-	sb.WriteString(fmt.Sprintf("\tList%s(ctx context.Context, limit, offset int) ([]domain.%s, error)\n", plural, model))
+	sb.WriteString(fmt.Sprintf("\tCRUDService[domain.%s]\n", model))
+	for _, f := range userFields {
+		if f.RefTable == "" {
+			continue
+		}
+		param := strings.ToLower(f.GoName[:1]) + f.GoName[1:]
+		sb.WriteString(fmt.Sprintf("\tList%sBy%s(ctx context.Context, %s string, limit, offset int) ([]domain.%s, error)\n", plural, f.GoName, param, model))
+	}
 	sb.WriteString("}\n")
 
 	return wrapSection(model, sb.String())
 }
 
-func genPortFile(module, model string) string {
+
+func genPortFile(module, model string, userFields []Field) string {
 	var sb strings.Builder
 	sb.WriteString("package ports\n\n")
 	sb.WriteString("import (\n")
 	sb.WriteString("\t\"context\"\n\n")
 	sb.WriteString(fmt.Sprintf("\t%q\n", module+"/internal/core/domain"))
 	sb.WriteString(")\n\n")
-	sb.WriteString(genPortSection(model))
+	sb.WriteString(genPortSection(model, userFields))
 	return sb.String()
 }
 
 // ── Service ───────────────────────────────────────────────────────────────────
 
-func genServiceSection(_ string, model string) string {
-	plural := pluralPascal(model)
+func genServiceSection(_ string, model string, _ []Field) string {
 	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("type %sService struct {\n", model))
-	sb.WriteString(fmt.Sprintf("\tstore  ports.%sStore\n", model))
-	sb.WriteString("\tlogger *slog.Logger\n")
+	sb.WriteString(fmt.Sprintf("\t*services.BaseService[domain.%s]\n", model))
 	sb.WriteString("}\n\n")
 
 	sb.WriteString(fmt.Sprintf("func New%sService(store ports.%sStore, logger *slog.Logger) *%sService {\n", model, model, model))
-	sb.WriteString(fmt.Sprintf("\treturn &%sService{store: store, logger: logger}\n", model))
-	sb.WriteString("}\n\n")
-
-	sb.WriteString(fmt.Sprintf("func (s *%sService) Create%s(ctx context.Context, p domain.%s) (*domain.%s, error) {\n", model, model, model, model))
-	sb.WriteString(fmt.Sprintf("\treturn s.store.Create%s(ctx, p)\n", model))
-	sb.WriteString("}\n\n")
-
-	sb.WriteString(fmt.Sprintf("func (s *%sService) Get%s(ctx context.Context, id string) (*domain.%s, error) {\n", model, model, model))
-	sb.WriteString(fmt.Sprintf("\treturn s.store.%sByID(ctx, id)\n", model))
-	sb.WriteString("}\n\n")
-
-	sb.WriteString(fmt.Sprintf("func (s *%sService) Update%s(ctx context.Context, p domain.%s) (*domain.%s, error) {\n", model, model, model, model))
-	sb.WriteString(fmt.Sprintf("\treturn s.store.Update%s(ctx, p)\n", model))
-	sb.WriteString("}\n\n")
-
-	sb.WriteString(fmt.Sprintf("func (s *%sService) Delete%s(ctx context.Context, id string) error {\n", model, model))
-	sb.WriteString(fmt.Sprintf("\treturn s.store.Delete%s(ctx, id)\n", model))
-	sb.WriteString("}\n\n")
-
-	sb.WriteString(fmt.Sprintf("func (s *%sService) List%s(ctx context.Context, limit, offset int) ([]domain.%s, error) {\n", model, plural, model))
-	sb.WriteString(fmt.Sprintf("\treturn s.store.List%s(ctx, limit, offset)\n", plural))
+	sb.WriteString(fmt.Sprintf("\treturn &%sService{\n", model))
+	sb.WriteString(fmt.Sprintf("\t\tBaseService: services.NewBaseService[domain.%s](store, logger),\n", model))
+	sb.WriteString("\t}\n")
 	sb.WriteString("}\n")
 
+	// Custom business logic can be added below this line
 	return wrapSection(model, sb.String())
 }
 
-func genServiceFile(module, model string) string {
+
+
+func genServiceFile(module, model string, userFields []Field) string {
 	var sb strings.Builder
 	sb.WriteString("package services\n\n")
 	sb.WriteString("import (\n")
@@ -172,137 +164,36 @@ func genServiceFile(module, model string) string {
 	sb.WriteString(fmt.Sprintf("\t%q\n", module+"/internal/core/domain"))
 	sb.WriteString(fmt.Sprintf("\t%q\n", module+"/internal/core/ports"))
 	sb.WriteString(")\n\n")
-	sb.WriteString(genServiceSection(module, model))
+	sb.WriteString(genServiceSection(module, model, userFields))
 	return sb.String()
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
 
-func genHandlerSection(_ string, model string) string {
-	lower := strings.ToLower(model[:1]) + model[1:]
+func genHandlerSection(module, model string) string {
 	plural := pluralPascal(model)
 	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("type %sHandler struct {\n", model))
-	sb.WriteString(fmt.Sprintf("\tsvc    ports.%sService\n", model))
-	sb.WriteString("\tlogger *slog.Logger\n")
+	sb.WriteString(fmt.Sprintf("\t*http.BaseHandler[domain.%s]\n", model))
 	sb.WriteString("}\n\n")
 
 	sb.WriteString(fmt.Sprintf("func New%sHandler(svc ports.%sService, logger *slog.Logger) *%sHandler {\n", model, model, model))
-	sb.WriteString(fmt.Sprintf("\treturn &%sHandler{svc: svc, logger: logger}\n", model))
+	sb.WriteString(fmt.Sprintf("\treturn &%sHandler{\n", model))
+	sb.WriteString(fmt.Sprintf("\t\tBaseHandler: http.NewBaseHandler[domain.%s](svc, logger, %q),\n", model, toSnakeCase(model)))
+	sb.WriteString("\t}\n")
 	sb.WriteString("}\n\n")
 
-	sb.WriteString(fmt.Sprintf("func (h *%sHandler) Routes() http.Handler {\n", model))
-	sb.WriteString("\tr := chi.NewRouter()\n")
-	sb.WriteString("\tr.Get(\"/\", h.handleList)\n")
-	sb.WriteString("\tr.Post(\"/\", h.handleCreate)\n")
-	sb.WriteString("\tr.Get(\"/{id}\", h.handleGet)\n")
-	sb.WriteString("\tr.Put(\"/{id}\", h.handleUpdate)\n")
-	sb.WriteString("\tr.Delete(\"/{id}\", h.handleDelete)\n")
-	sb.WriteString("\treturn r\n")
-	sb.WriteString("}\n\n")
-
-	// handleList
-	sb.WriteString(fmt.Sprintf("func (h *%sHandler) handleList(w http.ResponseWriter, r *http.Request) {\n", model))
-	sb.WriteString("\tlimit, offset := 100, 0\n")
-	sb.WriteString("\tif v := r.URL.Query().Get(\"limit\"); v != \"\" {\n")
-	sb.WriteString("\t\tn, err := strconv.Atoi(v)\n")
-	sb.WriteString("\t\tif err != nil || n <= 0 || n > 1000 {\n")
-	sb.WriteString("\t\t\thttp.Error(w, \"invalid limit\", http.StatusBadRequest)\n")
-	sb.WriteString("\t\t\treturn\n")
-	sb.WriteString("\t\t}\n")
-	sb.WriteString("\t\tlimit = n\n")
+	sb.WriteString(fmt.Sprintf("func Register%sRoutes(h *%sHandler) func(chi.Router) {\n", model, model))
+	sb.WriteString("\treturn func(r chi.Router) {\n")
+	sb.WriteString(fmt.Sprintf("\t\tr.Mount(\"/api/%s\", h.Routes())\n", toSnakeCase(plural)))
 	sb.WriteString("\t}\n")
-	sb.WriteString("\tif v := r.URL.Query().Get(\"offset\"); v != \"\" {\n")
-	sb.WriteString("\t\tn, err := strconv.Atoi(v)\n")
-	sb.WriteString("\t\tif err != nil || n < 0 {\n")
-	sb.WriteString("\t\t\thttp.Error(w, \"invalid offset\", http.StatusBadRequest)\n")
-	sb.WriteString("\t\t\treturn\n")
-	sb.WriteString("\t\t}\n")
-	sb.WriteString("\t\toffset = n\n")
-	sb.WriteString("\t}\n")
-	sb.WriteString(fmt.Sprintf("\titems, err := h.svc.List%s(r.Context(), limit, offset)\n", plural))
-	sb.WriteString("\tif err != nil {\n")
-	sb.WriteString(fmt.Sprintf("\t\th.logger.ErrorContext(r.Context(), \"list %s\", \"err\", err)\n", toSnakeCase(model)))
-	sb.WriteString("\t\thttp.Error(w, \"internal error\", http.StatusInternalServerError)\n")
-	sb.WriteString("\t\treturn\n")
-	sb.WriteString("\t}\n")
-	sb.WriteString("\trespondJSON(w, http.StatusOK, items)\n")
-	sb.WriteString("}\n\n")
-
-	// handleCreate
-	sb.WriteString(fmt.Sprintf("func (h *%sHandler) handleCreate(w http.ResponseWriter, r *http.Request) {\n", model))
-	sb.WriteString(fmt.Sprintf("\tvar %s domain.%s\n", lower, model))
-	sb.WriteString(fmt.Sprintf("\tif !decodeJSON(w, r, &%s) {\n", lower))
-	sb.WriteString("\t\treturn\n")
-	sb.WriteString("\t}\n")
-	sb.WriteString(fmt.Sprintf("\tresult, err := h.svc.Create%s(r.Context(), %s)\n", model, lower))
-	sb.WriteString("\tif err != nil {\n")
-	sb.WriteString(fmt.Sprintf("\t\tif errors.Is(err, domain.Err%sConflict) {\n", model))
-	sb.WriteString("\t\t\thttp.Error(w, \"conflict\", http.StatusConflict)\n")
-	sb.WriteString("\t\t} else {\n")
-	sb.WriteString(fmt.Sprintf("\t\t\th.logger.ErrorContext(r.Context(), \"create %s\", \"err\", err)\n", toSnakeCase(model)))
-	sb.WriteString("\t\t\thttp.Error(w, \"internal error\", http.StatusInternalServerError)\n")
-	sb.WriteString("\t\t}\n")
-	sb.WriteString("\t\treturn\n")
-	sb.WriteString("\t}\n")
-	sb.WriteString("\trespondJSON(w, http.StatusCreated, result)\n")
-	sb.WriteString("}\n\n")
-
-	// handleGet
-	sb.WriteString(fmt.Sprintf("func (h *%sHandler) handleGet(w http.ResponseWriter, r *http.Request) {\n", model))
-	sb.WriteString("\tid := chi.URLParam(r, \"id\")\n")
-	sb.WriteString(fmt.Sprintf("\titem, err := h.svc.Get%s(r.Context(), id)\n", model))
-	sb.WriteString("\tif err != nil {\n")
-	sb.WriteString(fmt.Sprintf("\t\tif errors.Is(err, domain.Err%sNotFound) {\n", model))
-	sb.WriteString("\t\t\thttp.Error(w, \"not found\", http.StatusNotFound)\n")
-	sb.WriteString("\t\t} else {\n")
-	sb.WriteString(fmt.Sprintf("\t\t\th.logger.ErrorContext(r.Context(), \"get %s\", \"id\", id, \"err\", err)\n", toSnakeCase(model)))
-	sb.WriteString("\t\t\thttp.Error(w, \"internal error\", http.StatusInternalServerError)\n")
-	sb.WriteString("\t\t}\n")
-	sb.WriteString("\t\treturn\n")
-	sb.WriteString("\t}\n")
-	sb.WriteString("\trespondJSON(w, http.StatusOK, item)\n")
-	sb.WriteString("}\n\n")
-
-	// handleUpdate
-	sb.WriteString(fmt.Sprintf("func (h *%sHandler) handleUpdate(w http.ResponseWriter, r *http.Request) {\n", model))
-	sb.WriteString("\tid := chi.URLParam(r, \"id\")\n")
-	sb.WriteString(fmt.Sprintf("\tvar %s domain.%s\n", lower, model))
-	sb.WriteString(fmt.Sprintf("\tif !decodeJSON(w, r, &%s) {\n", lower))
-	sb.WriteString("\t\treturn\n")
-	sb.WriteString("\t}\n")
-	sb.WriteString(fmt.Sprintf("\t%s.ID = id\n", lower))
-	sb.WriteString(fmt.Sprintf("\tresult, err := h.svc.Update%s(r.Context(), %s)\n", model, lower))
-	sb.WriteString("\tif err != nil {\n")
-	sb.WriteString(fmt.Sprintf("\t\tif errors.Is(err, domain.Err%sNotFound) {\n", model))
-	sb.WriteString("\t\t\thttp.Error(w, \"not found\", http.StatusNotFound)\n")
-	sb.WriteString("\t\t} else {\n")
-	sb.WriteString(fmt.Sprintf("\t\t\th.logger.ErrorContext(r.Context(), \"update %s\", \"id\", id, \"err\", err)\n", toSnakeCase(model)))
-	sb.WriteString("\t\t\thttp.Error(w, \"internal error\", http.StatusInternalServerError)\n")
-	sb.WriteString("\t\t}\n")
-	sb.WriteString("\t\treturn\n")
-	sb.WriteString("\t}\n")
-	sb.WriteString("\trespondJSON(w, http.StatusOK, result)\n")
-	sb.WriteString("}\n\n")
-
-	// handleDelete
-	sb.WriteString(fmt.Sprintf("func (h *%sHandler) handleDelete(w http.ResponseWriter, r *http.Request) {\n", model))
-	sb.WriteString("\tid := chi.URLParam(r, \"id\")\n")
-	sb.WriteString(fmt.Sprintf("\tif err := h.svc.Delete%s(r.Context(), id); err != nil {\n", model))
-	sb.WriteString(fmt.Sprintf("\t\tif errors.Is(err, domain.Err%sNotFound) {\n", model))
-	sb.WriteString("\t\t\thttp.Error(w, \"not found\", http.StatusNotFound)\n")
-	sb.WriteString("\t\t} else {\n")
-	sb.WriteString(fmt.Sprintf("\t\t\th.logger.ErrorContext(r.Context(), \"delete %s\", \"id\", id, \"err\", err)\n", toSnakeCase(model)))
-	sb.WriteString("\t\t\thttp.Error(w, \"internal error\", http.StatusInternalServerError)\n")
-	sb.WriteString("\t\t}\n")
-	sb.WriteString("\t\treturn\n")
-	sb.WriteString("\t}\n")
-	sb.WriteString("\tw.WriteHeader(http.StatusNoContent)\n")
 	sb.WriteString("}\n")
 
 	return wrapSection(model, sb.String())
 }
+
+
 
 func genHandlerFile(module, model string) string {
 	var sb strings.Builder
@@ -320,6 +211,7 @@ func genHandlerFile(module, model string) string {
 	return sb.String()
 }
 
+
 // ── Store ─────────────────────────────────────────────────────────────────────
 
 func genStoreSection(model string, userFields []Field, driver string) string {
@@ -335,8 +227,6 @@ func genStoreSection(model string, userFields []Field, driver string) string {
 
 func genStoreSectionPgx(model string, userFields []Field) string {
 	table := tableOf(model)
-	plural := pluralPascal(model)
-
 	selectCols := buildSelectCols(userFields)
 	insertCols := colList(userFields)
 	placeholders := placeholderList(len(userFields))
@@ -345,102 +235,22 @@ func genStoreSectionPgx(model string, userFields []Field) string {
 
 	var sb strings.Builder
 
-	// ── Create ──
-	sb.WriteString(fmt.Sprintf("func (s *Store) Create%s(ctx context.Context, p domain.%s) (*domain.%s, error) {\n", model, model, model))
-	if len(userFields) == 0 {
-		sb.WriteString(fmt.Sprintf("\trows, err := s.pool.Query(ctx,\n"))
-		sb.WriteString(fmt.Sprintf("\t\t`INSERT INTO %s DEFAULT VALUES RETURNING %s`,\n", table, selectCols))
-	} else {
-		sb.WriteString(fmt.Sprintf("\trows, err := s.pool.Query(ctx,\n"))
-		sb.WriteString(fmt.Sprintf("\t\t`INSERT INTO %s (%s) VALUES (%s) RETURNING %s`,\n", table, insertCols, placeholders, selectCols))
-		for _, f := range userFields {
-			sb.WriteString(fmt.Sprintf("\t\tp.%s,\n", f.GoName))
-		}
-	}
-	sb.WriteString("\t)\n")
-	sb.WriteString("\tif err != nil {\n")
-	sb.WriteString(fmt.Sprintf("\t\treturn nil, DecorateError(err, \"Create%s\")\n", model))
-	sb.WriteString("\t}\n")
-	sb.WriteString(fmt.Sprintf("\tresult, err := pgx.CollectOneRow(rows, pgx.RowToAddrOfStructByName[domain.%s])\n", model))
-	sb.WriteString("\tif err != nil {\n")
-	sb.WriteString("\t\tvar pgErr *pgconn.PgError\n")
-	sb.WriteString("\t\tif errors.As(err, &pgErr) && pgErr.Code == \"23505\" {\n")
-	sb.WriteString(fmt.Sprintf("\t\t\treturn nil, domain.Err%sConflict\n", model))
-	sb.WriteString("\t\t}\n")
-	sb.WriteString(fmt.Sprintf("\t\treturn nil, DecorateError(err, \"Create%s\")\n", model))
-	sb.WriteString("\t}\n")
-	sb.WriteString("\treturn result, nil\n")
+	sb.WriteString(fmt.Sprintf("type %sStore struct {\n", model))
+	sb.WriteString(fmt.Sprintf("\t*dbutil.BaseStore[domain.%s]\n", model))
 	sb.WriteString("}\n\n")
 
-	// ── ByID ──
-	sb.WriteString(fmt.Sprintf("func (s *Store) %sByID(ctx context.Context, id string) (*domain.%s, error) {\n", model, model))
-	sb.WriteString("\trows, err := s.pool.Query(ctx,\n")
-	sb.WriteString(fmt.Sprintf("\t\t`SELECT %s FROM %s WHERE id = $1`,\n", selectCols, table))
-	sb.WriteString("\t\tid,\n")
-	sb.WriteString("\t)\n")
-	sb.WriteString("\tif err != nil {\n")
-	sb.WriteString(fmt.Sprintf("\t\treturn nil, DecorateError(err, \"%sByID\")\n", model))
+	sb.WriteString(fmt.Sprintf("func New%sStore(pool *pgxpool.Pool) *%sStore {\n", model, model))
+	sb.WriteString(fmt.Sprintf("\treturn &%sStore{\n", model))
+	sb.WriteString(fmt.Sprintf("\t\tBaseStore: dbutil.NewBaseStore[domain.%s](pool, %q, %q, %q, %q, %q, %d),\n", model, table, selectCols, insertCols, updateSet, placeholders, nArgs))
 	sb.WriteString("\t}\n")
-	sb.WriteString(fmt.Sprintf("\tp, err := pgx.CollectOneRow(rows, pgx.RowToAddrOfStructByName[domain.%s])\n", model))
-	sb.WriteString("\tif errors.Is(err, pgx.ErrNoRows) {\n")
-	sb.WriteString(fmt.Sprintf("\t\treturn nil, domain.Err%sNotFound\n", model))
-	sb.WriteString("\t}\n")
-	sb.WriteString(fmt.Sprintf("\treturn p, DecorateError(err, \"%sByID\")\n", model))
-	sb.WriteString("}\n\n")
-
-	// ── Update ──
-	sb.WriteString(fmt.Sprintf("func (s *Store) Update%s(ctx context.Context, p domain.%s) (*domain.%s, error) {\n", model, model, model))
-	sb.WriteString("\trows, err := s.pool.Query(ctx,\n")
-	if len(userFields) == 0 {
-		sb.WriteString(fmt.Sprintf("\t\t`UPDATE %s SET updated_at = NOW() WHERE id = $1 RETURNING %s`,\n", table, selectCols))
-		sb.WriteString("\t\tp.ID,\n")
-	} else {
-		sb.WriteString(fmt.Sprintf("\t\t`UPDATE %s SET %s, updated_at = NOW() WHERE id = $%d RETURNING %s`,\n", table, updateSet, nArgs+1, selectCols))
-		for _, f := range userFields {
-			sb.WriteString(fmt.Sprintf("\t\tp.%s,\n", f.GoName))
-		}
-		sb.WriteString("\t\tp.ID,\n")
-	}
-	sb.WriteString("\t)\n")
-	sb.WriteString("\tif err != nil {\n")
-	sb.WriteString(fmt.Sprintf("\t\treturn nil, DecorateError(err, \"Update%s\")\n", model))
-	sb.WriteString("\t}\n")
-	sb.WriteString(fmt.Sprintf("\tresult, err := pgx.CollectOneRow(rows, pgx.RowToAddrOfStructByName[domain.%s])\n", model))
-	sb.WriteString("\tif errors.Is(err, pgx.ErrNoRows) {\n")
-	sb.WriteString(fmt.Sprintf("\t\treturn nil, domain.Err%sNotFound\n", model))
-	sb.WriteString("\t}\n")
-	sb.WriteString(fmt.Sprintf("\treturn result, DecorateError(err, \"Update%s\")\n", model))
-	sb.WriteString("}\n\n")
-
-	// ── Delete ──
-	sb.WriteString(fmt.Sprintf("func (s *Store) Delete%s(ctx context.Context, id string) error {\n", model))
-	sb.WriteString("\ttag, err := s.pool.Exec(ctx,\n")
-	sb.WriteString(fmt.Sprintf("\t\t`DELETE FROM %s WHERE id = $1`,\n", table))
-	sb.WriteString("\t\tid,\n")
-	sb.WriteString("\t)\n")
-	sb.WriteString("\tif err != nil {\n")
-	sb.WriteString(fmt.Sprintf("\t\treturn DecorateError(err, \"Delete%s\")\n", model))
-	sb.WriteString("\t}\n")
-	sb.WriteString("\tif tag.RowsAffected() == 0 {\n")
-	sb.WriteString(fmt.Sprintf("\t\treturn domain.Err%sNotFound\n", model))
-	sb.WriteString("\t}\n")
-	sb.WriteString("\treturn nil\n")
-	sb.WriteString("}\n\n")
-
-	// ── List ──
-	sb.WriteString(fmt.Sprintf("func (s *Store) List%s(ctx context.Context, limit, offset int) ([]domain.%s, error) {\n", plural, model))
-	sb.WriteString("\trows, err := s.pool.Query(ctx,\n")
-	sb.WriteString(fmt.Sprintf("\t\t`SELECT %s FROM %s ORDER BY created_at DESC LIMIT $1 OFFSET $2`,\n", selectCols, table))
-	sb.WriteString("\t\tlimit, offset,\n")
-	sb.WriteString("\t)\n")
-	sb.WriteString("\tif err != nil {\n")
-	sb.WriteString(fmt.Sprintf("\t\treturn nil, DecorateError(err, \"List%s\")\n", plural))
-	sb.WriteString("\t}\n")
-	sb.WriteString(fmt.Sprintf("\treturn pgx.CollectRows(rows, pgx.RowToStructByName[domain.%s])\n", model))
 	sb.WriteString("}\n")
 
+	// Custom methods can be added below this line
 	return wrapSection(model, sb.String())
 }
+
+
+
 
 // ── SQLite store helpers ───────────────────────────────────────────────────────
 
@@ -586,6 +396,26 @@ func genStoreSectionSQLite(model string, userFields []Field) string {
 	sb.WriteString("\t})\n")
 	sb.WriteString("}\n")
 
+	// ListBy<RefField>
+	for _, f := range userFields {
+		if f.RefTable == "" {
+			continue
+		}
+		param := strings.ToLower(f.GoName[:1]) + f.GoName[1:]
+		methodName := fmt.Sprintf("List%sBy%s", plural, f.GoName)
+		sb.WriteString(fmt.Sprintf("\nfunc (s *Store) %s(ctx context.Context, %s string, limit, offset int) ([]domain.%s, error) {\n", methodName, param, model))
+		sb.WriteString(fmt.Sprintf("\trows, err := s.db.QueryContext(ctx,\n\t\t`SELECT %s FROM %s WHERE %s = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`,\n\t\t%s, limit, offset,\n\t)\n", selectCols, table, f.DBName, param))
+		sb.WriteString("\tif err != nil {\n")
+		sb.WriteString(fmt.Sprintf("\t\treturn nil, DecorateError(err, %q)\n", methodName))
+		sb.WriteString("\t}\n")
+		sb.WriteString(fmt.Sprintf("\treturn collectRows(rows, func(r *sql.Rows) (domain.%s, error) {\n", model))
+		sb.WriteString(fmt.Sprintf("\t\tvar p domain.%s\n", model))
+		sb.WriteString(fmt.Sprintf("\t\terr := r.Scan(%s)\n", scanPtrs))
+		sb.WriteString("\t\treturn p, err\n")
+		sb.WriteString("\t})\n")
+		sb.WriteString("}\n")
+	}
+
 	return wrapSection(model, sb.String())
 }
 
@@ -675,16 +505,31 @@ func genAlterMigration(model string, addFields []Field, driver string) string {
 
 func genWireSection(model string) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("var %sModule = fx.Options(\n", model))
+	sb.WriteString(fmt.Sprintf("var %sModule = fx.Module(%q,\n", model, toSnakeCase(model)))
+	sb.WriteString("\tfx.Private(), // Enforce strict hexagonal boundaries\n")
 	sb.WriteString("\tfx.Provide(\n")
-	sb.WriteString(fmt.Sprintf("\t\tfunc(st *store.Store) ports.%sStore { return st },\n", model))
-	sb.WriteString(fmt.Sprintf("\t\tfunc(svc *services.%sService) ports.%sService { return svc },\n", model, model))
+	sb.WriteString(fmt.Sprintf("\t\tstore.New%sStore,\n", model))
+	sb.WriteString(fmt.Sprintf("\t\tfx.Annotate(store.New%sStore, fx.As(new(ports.%sStore))),\n", model, model))
 	sb.WriteString(fmt.Sprintf("\t\tservices.New%sService,\n", model))
+	sb.WriteString(fmt.Sprintf("\t\tfx.Annotate(services.New%sService, fx.As(new(ports.%sService))),\n", model, model))
 	sb.WriteString(fmt.Sprintf("\t\thttpAdapter.New%sHandler,\n", model))
 	sb.WriteString("\t),\n")
+
+	// Exposed to the rest of the application
+	sb.WriteString("\tfx.Provide(\n")
+	sb.WriteString(fmt.Sprintf("\t\tfx.Annotate(httpAdapter.Register%sRoutes, fx.ResultTags(`group:\"routes\"`)),\n", model))
+	sb.WriteString("\t),\n")
+
+	// Cross-cutting concerns
+	sb.WriteString("\tfx.Decorate(func(svc ports.CRUDService[domain." + model + "]) ports.CRUDService[domain." + model + "] {\n")
+	sb.WriteString(fmt.Sprintf("\t\tsvc = telemetry.NewTracingDecorator[domain.%s](svc, %q)\n", model, model))
+	sb.WriteString(fmt.Sprintf("\t\tsvc = telemetry.NewMetricsDecorator[domain.%s](svc, %q)\n", model, model))
+	sb.WriteString("\t\treturn svc\n")
+	sb.WriteString("\t}),\n")
 	sb.WriteString(")\n")
 	return sb.String()
 }
+
 
 func genWireFile(module, model string) string {
 	var sb strings.Builder
@@ -692,13 +537,16 @@ func genWireFile(module, model string) string {
 	sb.WriteString("import (\n")
 	sb.WriteString(fmt.Sprintf("\thttpAdapter %q\n", module+"/internal/adapters/http"))
 	sb.WriteString(fmt.Sprintf("\t%q\n", module+"/internal/adapters/store"))
+	sb.WriteString(fmt.Sprintf("\t%q\n", module+"/internal/core/domain"))
 	sb.WriteString(fmt.Sprintf("\t%q\n", module+"/internal/core/ports"))
-	sb.WriteString(fmt.Sprintf("\t%q\n\n", module+"/internal/core/services"))
+	sb.WriteString(fmt.Sprintf("\t%q\n", module+"/internal/core/services"))
+	sb.WriteString(fmt.Sprintf("\t%q\n\n", module+"/internal/pkg/telemetry"))
 	sb.WriteString("\t\"go.uber.org/fx\"\n")
 	sb.WriteString(")\n\n")
 	sb.WriteString(wrapSection(model, genWireSection(model)))
 	return sb.String()
 }
+
 
 // ── HTTP JSON helpers (generated once per project) ────────────────────────────
 

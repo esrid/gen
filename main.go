@@ -20,6 +20,8 @@ func main() {
 		err = runRemove(os.Args[2:])
 	case "destroy":
 		err = runDestroy(os.Args[2:])
+	case "method":
+		err = runMethod(os.Args[2:])
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -37,10 +39,11 @@ func printUsage() {
 	fmt.Print(`gen - code generator for hexagonal Go/pgx projects
 
 Commands:
-  gen scaffold <Model> [field:type ...]        create domain, port, store, service, handler, migration
-  gen add      <Model> [field:type ...]        add fields to existing model
-  gen remove   <Model> <field> [field2 ...]    remove fields from existing model
-  gen destroy  <Model> [--force]               remove all generated files (confirms before deleting)
+  gen scaffold <Model> [field:type ...]                   create domain, port, store, service, handler, migration
+  gen add      <Model> [field:type ...]                   add fields to existing model
+  gen remove   <Model> <field> [field2 ...]               remove fields from existing model
+  gen destroy  <Model> [--force]                          remove all generated files (confirms before deleting)
+  gen method   <Model> <MethodName> "<params> -> <returns>"  add custom method to port interfaces + service stub
 
 Types:
   string *string   int *int   float *float   bool *bool   time *time
@@ -53,12 +56,15 @@ Examples:
   gen scaffold Post title:string body:text user_id:ref:users
   gen scaffold Country code:string{2} name:string
   gen add Product description:*string tags:json
+  gen method Product FindBySlug "slug:string -> *Product,error"
+  gen method Order ListByUser "userID:string -> []Order,error"
 
 Notes:
   - Auto-adds: id (UUID uuid7), created_at, updated_at
   - Code wrapped in // gen:begin <Model> / // gen:end <Model> — safe to add code outside
   - gen add only modifies marked sections + creates ALTER TABLE migration
   - gen destroy asks confirmation, skips files with user code outside markers
+  - gen method adds signature to both XStore+XService interfaces; you implement the store method manually
   - Run from project root (where go.mod lives)
   - Install: cd /path/to/gen && go install .
 `)

@@ -39,9 +39,9 @@ func runScaffold(args []string) error {
 	}
 	codeFiles := []genFile{
 		{p.domainFile(model), genDomainFile(model, userFields)},
-		{p.portFile(model), genPortFile(p.Module, model)},
+		{p.portFile(model), genPortFile(p.Module, model, userFields)},
 		{p.storeFile(model), genStoreFile(p.Module, model, userFields, p.Driver)},
-		{p.serviceFile(model), genServiceFile(p.Module, model)},
+		{p.serviceFile(model), genServiceFile(p.Module, model, userFields)},
 		{p.handlerFile(model), genHandlerFile(p.Module, model)},
 		{p.wireFile(model), genWireFile(p.Module, model)},
 	}
@@ -82,6 +82,23 @@ func runScaffold(args []string) error {
 	fmt.Printf("       %sH *%sHandler\n", lower, model)
 	fmt.Printf("       r.Mount(\"/api/%s\", %sH.Routes())\n", plural, lower)
 	fmt.Printf("  3. Run migrations:  make migrate  (or: goose up)\n")
+
+	var refFields []Field
+	for _, f := range userFields {
+		if f.RefTable != "" {
+			refFields = append(refFields, f)
+		}
+	}
+	if len(refFields) > 0 {
+		fmt.Println()
+		fmt.Println("ref-field queries generated (store + service + port):")
+		pluralPascalName := pluralPascal(model)
+		for _, f := range refFields {
+			param := strings.ToLower(f.GoName[:1]) + f.GoName[1:]
+			fmt.Printf("  List%sBy%s(ctx, %s string, limit, offset int)\n", pluralPascalName, f.GoName, param)
+		}
+	}
+
 	return nil
 }
 

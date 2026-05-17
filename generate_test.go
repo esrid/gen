@@ -321,7 +321,7 @@ func TestGenDomainSection_NoFields(t *testing.T) {
 // ── genPortSection ────────────────────────────────────────────────────────────
 
 func TestGenPortSection(t *testing.T) {
-	got := genPortSection("Product")
+	got := genPortSection("Product", nil)
 
 	must := []string{
 		"type ProductStore interface",
@@ -343,7 +343,7 @@ func TestGenPortSection(t *testing.T) {
 // ── genServiceSection ─────────────────────────────────────────────────────────
 
 func TestGenServiceSection(t *testing.T) {
-	got := genServiceSection("mymodule", "Product")
+	got := genServiceSection("mymodule", "Product", nil)
 
 	must := []string{
 		"func (s *ProductService) UpdateProduct(ctx context.Context, p domain.Product) (*domain.Product, error)",

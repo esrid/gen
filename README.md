@@ -115,6 +115,26 @@ gen destroy Product --force   # no confirmation
 | `name:ref:<table>` | `string` | `TEXT NOT NULL REFERENCES <table>(id) ON DELETE CASCADE` |
 | `name:*ref:<table>` | `*string` | `TEXT REFERENCES <table>(id) ON DELETE SET NULL` |
 
+#### `ref:` fields also generate query methods
+
+Every `ref:` field on a model produces a `List<Plural>By<GoName>(ctx, id string, limit, offset int)` method in three places, all inside `// gen:begin/end` markers:
+
+| Layer | What is generated |
+|-------|-------------------|
+| `internal/core/ports/<model>.go` | added to `<Model>Store` and `<Model>Service` interfaces |
+| `internal/core/services/<model>_service.go` | delegates to the store |
+| `internal/adapters/store/<model>_store.go` | executes `SELECT … WHERE <field> = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3` |
+
+```bash
+gen scaffold Order restaurant_id:ref:restaurants item_id:ref:items amount:float
+# generates:
+#   ListOrdersByRestaurantID(ctx, restaurantID string, limit, offset int) ([]domain.Order, error)
+#   ListOrdersByItemID(ctx, itemID string, limit, offset int)        ([]domain.Order, error)
+```
+
+**Important — `gen add` vs `gen scaffold`:**
+`gen add` only regenerates the store section (inside markers). It does **not** touch the port or service files. If you add a `ref:` field via `gen add`, the store gets the new method automatically, but you must manually add the method signature to the `<Model>Store` / `<Model>Service` interfaces inside their `// gen:begin/end` block in the port file, and the implementation in the service file.
+
 Prefix any type with `*` to make it nullable — removes `NOT NULL` and `DEFAULT` from SQL.
 
 Go naming follows standard initialisms automatically: `user_id` → `UserID`, `content_url` → `ContentURL`, `api_key` → `APIKey`.
@@ -167,7 +187,7 @@ Matches the `boilerplate-pg` and `boilerplate-sql` layouts.
 ## Full workflow example
 
 ```bash
-# 1. New model
+# 1. New model (client_id:ref:clients generates ListInvoicesByClientID everywhere)
 gen scaffold Invoice number:string{20} amount:float paid:bool client_id:ref:clients
 
 # 2. Wire up (2 manual lines)
