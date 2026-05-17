@@ -41,6 +41,7 @@ func runDestroy(args []string) error {
 		{p.storeFile(model), "store"},
 		{p.serviceFile(model), "service"},
 		{p.handlerFile(model), "handler"},
+		{p.wireFile(model), "wire"},
 	}
 
 	var candidates []candidate

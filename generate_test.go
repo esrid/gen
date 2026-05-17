@@ -289,12 +289,17 @@ func TestGenDomainSection(t *testing.T) {
 		"errors.New(",
 		"type Product struct",
 		`db:"id"`,
+		`json:"id"`,
 		"Name",
 		`db:"name"`,
+		`json:"name"`,
 		"Price",
 		`db:"price"`,
+		`json:"price"`,
 		"CreatedAt",
+		`json:"created_at"`,
 		"UpdatedAt",
+		`json:"updated_at"`,
 	}
 	for _, s := range must {
 		if !strings.Contains(got, s) {
@@ -559,6 +564,45 @@ func TestGenHandlerSection(t *testing.T) {
 	} {
 		if strings.Contains(got, bad) {
 			t.Errorf("handler leaks raw error: found %q", bad)
+		}
+	}
+}
+
+// ── genWireSection ────────────────────────────────────────────────────────────
+
+func TestGenWireSection(t *testing.T) {
+	got := genWireSection("Product")
+
+	must := []string{
+		"var ProductModule = fx.Options(",
+		"fx.Provide(",
+		"ports.ProductStore",
+		"ports.ProductService",
+		"services.NewProductService",
+		"httpAdapter.NewProductHandler",
+	}
+	for _, s := range must {
+		if !strings.Contains(got, s) {
+			t.Errorf("wire section missing %q\n---\n%s", s, got)
+		}
+	}
+}
+
+func TestGenWireFile(t *testing.T) {
+	got := genWireFile("mymodule", "Product")
+
+	must := []string{
+		"package app",
+		`httpAdapter "mymodule/internal/adapters/http"`,
+		`"mymodule/internal/adapters/store"`,
+		`"mymodule/internal/core/ports"`,
+		`"mymodule/internal/core/services"`,
+		`"go.uber.org/fx"`,
+		"var ProductModule",
+	}
+	for _, s := range must {
+		if !strings.Contains(got, s) {
+			t.Errorf("wire file missing %q\n---\n%s", s, got)
 		}
 	}
 }

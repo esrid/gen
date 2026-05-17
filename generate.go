@@ -63,12 +63,16 @@ func genDomainSection(model string, userFields []Field) string {
 
 	// struct
 	sb.WriteString(fmt.Sprintf("type %s struct {\n", model))
-	sb.WriteString("\tID        string    `db:\"id\"`\n")
+	sb.WriteString("\tID        string    `db:\"id\"          json:\"id\"`\n")
 	for _, f := range userFields {
-		sb.WriteString(fmt.Sprintf("\t%-10s %-12s `db:\"%s\"`\n", f.GoName, f.GoType, f.DBName))
+		jsonTag := f.DBName
+		if strings.HasPrefix(f.GoType, "*") {
+			jsonTag = f.DBName + ",omitempty"
+		}
+		sb.WriteString(fmt.Sprintf("\t%-10s %-12s `db:\"%s\" json:\"%s\"`\n", f.GoName, f.GoType, f.DBName, jsonTag))
 	}
-	sb.WriteString("\tCreatedAt time.Time `db:\"created_at\"`\n")
-	sb.WriteString("\tUpdatedAt time.Time `db:\"updated_at\"`\n")
+	sb.WriteString("\tCreatedAt time.Time `db:\"created_at\"  json:\"created_at\"`\n")
+	sb.WriteString("\tUpdatedAt time.Time `db:\"updated_at\"  json:\"updated_at\"`\n")
 	sb.WriteString("}\n")
 
 	return wrapSection(model, sb.String())
@@ -664,6 +668,35 @@ func genAlterMigration(model string, addFields []Field, driver string) string {
 			sb.WriteString(fmt.Sprintf("ALTER TABLE %s DROP COLUMN IF EXISTS %s;\n", table, f.DBName))
 		}
 	}
+	return sb.String()
+}
+
+// ── fx wire module (one file per scaffolded model) ───────────────────────────
+
+func genWireSection(model string) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("var %sModule = fx.Options(\n", model))
+	sb.WriteString("\tfx.Provide(\n")
+	sb.WriteString(fmt.Sprintf("\t\tfunc(st *store.Store) ports.%sStore { return st },\n", model))
+	sb.WriteString(fmt.Sprintf("\t\tfunc(svc *services.%sService) ports.%sService { return svc },\n", model, model))
+	sb.WriteString(fmt.Sprintf("\t\tservices.New%sService,\n", model))
+	sb.WriteString(fmt.Sprintf("\t\thttpAdapter.New%sHandler,\n", model))
+	sb.WriteString("\t),\n")
+	sb.WriteString(")\n")
+	return sb.String()
+}
+
+func genWireFile(module, model string) string {
+	var sb strings.Builder
+	sb.WriteString("package app\n\n")
+	sb.WriteString("import (\n")
+	sb.WriteString(fmt.Sprintf("\thttpAdapter %q\n", module+"/internal/adapters/http"))
+	sb.WriteString(fmt.Sprintf("\t%q\n", module+"/internal/adapters/store"))
+	sb.WriteString(fmt.Sprintf("\t%q\n", module+"/internal/core/ports"))
+	sb.WriteString(fmt.Sprintf("\t%q\n\n", module+"/internal/core/services"))
+	sb.WriteString("\t\"go.uber.org/fx\"\n")
+	sb.WriteString(")\n\n")
+	sb.WriteString(wrapSection(model, genWireSection(model)))
 	return sb.String()
 }
 

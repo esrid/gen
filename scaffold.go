@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func runScaffold(args []string) error {
@@ -42,6 +43,7 @@ func runScaffold(args []string) error {
 		{p.storeFile(model), genStoreFile(p.Module, model, userFields, p.Driver)},
 		{p.serviceFile(model), genServiceFile(p.Module, model)},
 		{p.handlerFile(model), genHandlerFile(p.Module, model)},
+		{p.wireFile(model), genWireFile(p.Module, model)},
 	}
 
 	// Ensure JSON helpers exist before creating the handler (generated handler
@@ -70,11 +72,16 @@ func runScaffold(args []string) error {
 		fmt.Printf("  skip   migration (all files already exist)\n")
 	}
 
+	lower := strings.ToLower(model[:1]) + model[1:]
+	plural := tableOf(model)
+
 	fmt.Println()
 	fmt.Println("next steps:")
-	fmt.Printf("  1. Register %sStore in your App struct / wire up dependencies\n", model)
-	fmt.Printf("  2. Run migrations: make migrate (or goose up)\n")
-	fmt.Printf("  3. Add %sService to internal/core/services/ if needed\n", model)
+	fmt.Printf("  1. Add %sModule to fx.New() in app.go  — 1 line\n", model)
+	fmt.Printf("  2. In router.go, add to NewRouter params + body:\n")
+	fmt.Printf("       %sH *%sHandler\n", lower, model)
+	fmt.Printf("       r.Mount(\"/api/%s\", %sH.Routes())\n", plural, lower)
+	fmt.Printf("  3. Run migrations:  make migrate  (or: goose up)\n")
 	return nil
 }
 
