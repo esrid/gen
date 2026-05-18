@@ -104,10 +104,11 @@ func mergeUserFields(parsed []ParsedField, add []Field) []Field {
 			continue
 		}
 		out = append(out, Field{
-			GoName:  pf.GoName,
-			DBName:  pf.DBName,
-			GoType:  pf.GoType,
-			SQLType: goTypeToSQLType(pf.GoType),
+			GoName:   pf.GoName,
+			DBName:   pf.DBName,
+			GoType:   pf.GoType,
+			SQLType:  goTypeToSQLType(pf.GoType),
+			RefTable: pf.RefTable,
 		})
 	}
 	out = append(out, add...)

@@ -10,9 +10,10 @@ import (
 
 // ParsedField is a field read from an existing Go struct via AST.
 type ParsedField struct {
-	GoName string
-	DBName string
-	GoType string
+	GoName   string
+	DBName   string
+	GoType   string
+	RefTable string // from ref:"table" struct tag
 }
 
 // readStructFields parses filename and returns the fields of structName.
@@ -62,7 +63,8 @@ func collectParsedFields(st *ast.StructType) []ParsedField {
 			GoType: exprStr(f.Type),
 		}
 		if f.Tag != nil {
-			pf.DBName = dbTagValue(f.Tag.Value)
+			pf.DBName = structTagValue(f.Tag.Value, "db")
+			pf.RefTable = structTagValue(f.Tag.Value, "ref")
 		}
 		if pf.DBName == "" {
 			pf.DBName = toSnakeCase(pf.GoName)
@@ -86,11 +88,12 @@ func exprStr(e ast.Expr) string {
 	return "any"
 }
 
-func dbTagValue(tagLit string) string {
+func structTagValue(tagLit, key string) string {
 	tag := strings.Trim(tagLit, "`")
+	prefix := key + `:"`
 	for _, part := range strings.Fields(tag) {
-		if strings.HasPrefix(part, `db:"`) {
-			return strings.Trim(strings.TrimPrefix(part, "db:"), `"`)
+		if strings.HasPrefix(part, prefix) {
+			return strings.Trim(strings.TrimPrefix(part, prefix), `"`)
 		}
 	}
 	return ""
