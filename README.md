@@ -19,6 +19,12 @@ gen scaffold Product name:string price:float
 
 Run from your project root (where `go.mod` lives). Driver auto-detected from `go.mod` — `modernc.org/sqlite` or `mattn/go-sqlite3` → SQLite, otherwise pgx.
 
+> **Shell quoting** — arguments containing `{}` or `[]` must be single-quoted in zsh/bash to prevent glob expansion:
+> ```bash
+> ./gen scaffold Product 'slug:string{50}[unique,index]'   # correct
+> ./gen scaffold Product slug:string{50}[unique,index]      # zsh error: no matches found
+> ```
+
 ---
 
 ## Commands
@@ -40,10 +46,10 @@ Creates all layers for a new model in one shot:
 Auto-adds `id`, `created_at`, `updated_at` to every model. Skips any file that already exists — never overwrites.
 
 ```bash
-gen scaffold Product name:string price:float active:bool
+gen scaffold Product 'name:string[unique]' price:float active:bool
 gen scaffold Post    title:string body:text user_id:ref:users
-gen scaffold Country code:string{2} name:string
-gen scaffold WordAssociation word_id:ref:words meaning:string weight:float
+gen scaffold Country 'code:string{2}[unique]' name:string
+gen scaffold Order   amount:float 'ref_num:string{20}[unique,index]' client_id:ref:clients
 ```
 
 ---
@@ -54,13 +60,14 @@ Adds one or more fields to an existing model.
 
 - Parses the existing struct via AST — reads current fields
 - Skips fields that already exist (safe to re-run)
+- **Preserves all non-gen struct tags** (`validate:`, custom tags, etc.) across rewrites
 - Inserts new fields into the struct
 - Regenerates all store CRUD SQL inside `// gen:begin` / `// gen:end` markers
 - Creates an `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` migration
 
 ```bash
 gen add Product description:*string category:string
-gen add Post    published:bool published_at:*time
+gen add Post    'published:bool' 'published_at:*time' 'slug:string{200}[unique,index]'
 ```
 
 ---
@@ -70,6 +77,7 @@ gen add Post    published:bool published_at:*time
 Removes one or more fields from an existing model.
 
 - Validates each field exists and is not auto-managed (`id`, `created_at`, `updated_at`)
+- **Preserves all non-gen struct tags** on remaining fields
 - Removes the field(s) from the domain struct
 - Regenerates store SQL without the dropped columns
 - Creates a `DROP COLUMN` migration — `-- +goose Down` includes `ADD COLUMN` for rollback
@@ -98,24 +106,58 @@ gen destroy Product --force   # no confirmation
 
 ## Field types
 
-| Syntax | Go type | SQL |
-|--------|---------|-----|
-| `name:string` | `string` | `TEXT NOT NULL DEFAULT ''` |
-| `name:*string` | `*string` | `TEXT` |
-| `name:int` | `int64` | `BIGINT NOT NULL DEFAULT 0` |
-| `name:*int` | `*int64` | `BIGINT` |
-| `name:float` | `float64` | `DOUBLE PRECISION NOT NULL DEFAULT 0` |
-| `name:*float` | `*float64` | `DOUBLE PRECISION` |
-| `name:bool` | `bool` | `BOOLEAN NOT NULL DEFAULT FALSE` |
-| `name:*bool` | `*bool` | `BOOLEAN` |
-| `name:time` | `time.Time` | `TIMESTAMPTZ NOT NULL DEFAULT NOW()` |
-| `name:*time` | `*time.Time` | `TIMESTAMPTZ` |
-| `name:json` | `[]byte` | `JSONB NOT NULL DEFAULT '{}'` |
-| `name:string{n}` | `string` | `VARCHAR(n) NOT NULL DEFAULT ''` |
-| `name:ref:<table>` | `string` | `TEXT NOT NULL REFERENCES <table>(id) ON DELETE CASCADE` |
-| `name:*ref:<table>` | `*string` | `TEXT REFERENCES <table>(id) ON DELETE SET NULL` |
+| Syntax | Go type | SQL (pgx) | SQL (SQLite) |
+|--------|---------|-----------|--------------|
+| `name:string` | `string` | `TEXT NOT NULL DEFAULT ''` | same |
+| `name:*string` | `*string` | `TEXT` | same |
+| `name:int` | `int64` | `BIGINT NOT NULL DEFAULT 0` | `INTEGER NOT NULL DEFAULT 0` |
+| `name:*int` | `*int64` | `BIGINT` | `INTEGER` |
+| `name:float` | `float64` | `DOUBLE PRECISION NOT NULL DEFAULT 0` | `REAL NOT NULL DEFAULT 0` |
+| `name:*float` | `*float64` | `DOUBLE PRECISION` | `REAL` |
+| `name:bool` | `bool` | `BOOLEAN NOT NULL DEFAULT FALSE` | `INTEGER NOT NULL DEFAULT 0` |
+| `name:*bool` | `*bool` | `BOOLEAN` | `INTEGER` |
+| `name:time` | `time.Time` | `TIMESTAMPTZ NOT NULL DEFAULT NOW()` | `DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP` |
+| `name:*time` | `*time.Time` | `TIMESTAMPTZ` | `DATETIME` |
+| `name:json` | `[]byte` | `JSONB NOT NULL DEFAULT '{}'` | `TEXT NOT NULL DEFAULT '{}'` |
+| `name:string{n}` | `string` | `VARCHAR(n) NOT NULL DEFAULT ''` | same |
+| `name:*string{n}` | `*string` | `VARCHAR(n)` | same |
+| `name:ref:<table>` | `string` | `TEXT NOT NULL REFERENCES <table>(id) ON DELETE CASCADE` | same |
+| `name:*ref:<table>` | `*string` | `TEXT REFERENCES <table>(id) ON DELETE SET NULL` | same |
 
-#### `ref:` fields also generate query methods
+Prefix any type with `*` to make it nullable — removes `NOT NULL` and `DEFAULT` from SQL.
+
+Go naming follows standard initialisms automatically: `user_id` → `UserID`, `content_url` → `ContentURL`, `api_key` → `APIKey`.
+
+---
+
+## Modifiers
+
+Append `[modifier,modifier]` after the type to add SQL constraints or indexes.
+
+```bash
+gen scaffold Product 'email:string[unique]' 'slug:string{100}[unique,index]' 'rank:int[index]'
+```
+
+| Modifier | Effect on column SQL | Effect on migration |
+|----------|---------------------|---------------------|
+| `unique` | appends `UNIQUE` to the column definition | — (UNIQUE implicitly creates a unique index in both engines) |
+| `index` | — | emits a separate `CREATE INDEX` statement after the table |
+
+**Both modifiers work on all field types and both drivers.** They compose freely:
+
+```bash
+'code:string{6}[unique]'          # VARCHAR(6) NOT NULL DEFAULT '' UNIQUE
+'slug:string[unique,index]'        # TEXT NOT NULL DEFAULT '' UNIQUE  +  CREATE INDEX
+'score:int[index]'                 # BIGINT NOT NULL DEFAULT 0        +  CREATE INDEX
+'owner_id:ref:users[unique]'       # TEXT NOT NULL REFERENCES …       UNIQUE
+```
+
+**pgx index naming** — unnamed (`CREATE INDEX ON table (col)`) — Postgres auto-names them.  
+**SQLite index naming** — named (`CREATE INDEX table_col_idx ON table (col)`).
+
+---
+
+## `ref:` fields generate query methods
 
 Every `ref:` field on a model produces a `List<Plural>By<GoName>(ctx, id string, limit, offset int)` method in three places, all inside `// gen:begin/end` markers:
 
@@ -132,12 +174,7 @@ gen scaffold Order restaurant_id:ref:restaurants item_id:ref:items amount:float
 #   ListOrdersByItemID(ctx, itemID string, limit, offset int)        ([]domain.Order, error)
 ```
 
-**Important — `gen add` vs `gen scaffold`:**
-`gen add` only regenerates the store section (inside markers). It does **not** touch the port or service files. If you add a `ref:` field via `gen add`, the store gets the new method automatically, but you must manually add the method signature to the `<Model>Store` / `<Model>Service` interfaces inside their `// gen:begin/end` block in the port file, and the implementation in the service file.
-
-Prefix any type with `*` to make it nullable — removes `NOT NULL` and `DEFAULT` from SQL.
-
-Go naming follows standard initialisms automatically: `user_id` → `UserID`, `content_url` → `ContentURL`, `api_key` → `APIKey`.
+**Note on `gen add` with `ref:` fields:** `gen add` only regenerates the store section (inside markers). If you add a `ref:` field via `gen add`, the store gets the new `ListBy` method automatically, but you must manually add the method signature to the port interfaces and service file inside their `// gen:begin/end` blocks.
 
 ---
 
@@ -152,7 +189,7 @@ var ErrProductConflict = errors.New("product conflict")
 
 type Product struct {
     ID        string    `db:"id"          json:"id"`
-    Name      string    `db:"name"        json:"name"`
+    Name      string    `db:"name"        json:"name" validate:"required,min=2"`
     CreatedAt time.Time `db:"created_at"  json:"created_at"`
     UpdatedAt time.Time `db:"updated_at"  json:"updated_at"`
 }
@@ -161,6 +198,7 @@ type Product struct {
 
 - `gen add` and `gen remove` only regenerate code **inside** markers
 - Anything you write **outside** markers is never touched
+- **Non-gen struct tags** (`validate:`, `form:`, custom tags) are read from the existing struct and re-emitted verbatim — adding a field or removing one never strips tags from untouched fields
 - `gen destroy` refuses to delete files with user code outside markers
 - Migrations are always append-only — no command ever deletes them
 
@@ -187,21 +225,20 @@ Matches the `boilerplate-pg` and `boilerplate-sql` layouts.
 ## Full workflow example
 
 ```bash
-# 1. New model (client_id:ref:clients generates ListInvoicesByClientID everywhere)
-gen scaffold Invoice number:string{20} amount:float paid:bool client_id:ref:clients
+# 1. New model
+gen scaffold Invoice 'number:string{20}[unique]' amount:float paid:bool client_id:ref:clients
 
-# 2. Wire up (2 manual lines)
-#    app.go:    add InvoiceModule to fx.New()
-#    router.go: add invoiceH *InvoiceHandler param + r.Mount("/api/invoices", invoiceH.Routes())
+# 2. Wire up — one line in internal/app/app.go:
+#    add InvoiceModule to fx.New()
 
 # 3. Run migrations
 make migrate
 
-# 4. Add a field later
-gen add Invoice notes:*string due_date:*time
+# 4. Add fields later — existing validate: tags on other fields are preserved
+gen add Invoice notes:*string 'due_date:*time' 'priority:int[index]'
 make migrate
 
-# 5. Change your mind on a field
+# 5. Change your mind
 gen remove Invoice notes
 make migrate
 
@@ -211,9 +248,9 @@ gen destroy Invoice --force
 goose down -dir ./internal/adapters/store/migrations
 ```
 
-After `scaffold`, two things need manual wiring — `gen` cannot do them because they live in user-owned files with no markers:
+After `scaffold`, one thing needs manual wiring — `gen` cannot do it because it lives in a user-owned file with no markers:
 
-**1. `internal/app/app.go` — add the module to `fx.New()`**
+**`internal/app/app.go` — add the module to `fx.New()`**
 ```go
 fx.New(
     // ... existing modules
@@ -221,19 +258,4 @@ fx.New(
 )
 ```
 
-`InvoiceModule` is an `fx.Options` block that wires the store interface adapter, service interface adapter, service constructor, and handler constructor — all provided to the fx container automatically.
-
-**2. `internal/adapters/http/router.go` — add the handler param and mount the route**
-```go
-func NewRouter(
-    authSvc  ports.AuthService,
-    invoiceH *InvoiceHandler,   // ← add (fx injects from InvoiceModule)
-    logger   *slog.Logger,
-) http.Handler {
-    ...
-    r.Mount("/api/invoices", invoiceH.Routes())   // ← mount
-    ...
-}
-```
-
-The URL prefix, middleware group (public vs auth-required), and role guards are decisions only you can make — that's why `gen` stops here.
+`InvoiceModule` is an `fx.Module` that wires the store interface adapter, service, and handler — all provided to the fx container automatically. Routes self-register via `group:"routes"`.

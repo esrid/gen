@@ -104,11 +104,13 @@ func mergeUserFields(parsed []ParsedField, add []Field) []Field {
 			continue
 		}
 		out = append(out, Field{
-			GoName:   pf.GoName,
-			DBName:   pf.DBName,
-			GoType:   pf.GoType,
-			SQLType:  goTypeToSQLType(pf.GoType),
-			RefTable: pf.RefTable,
+			GoName:    pf.GoName,
+			DBName:    pf.DBName,
+			GoType:    pf.GoType,
+			SQLType:   goTypeToSQLType(pf.GoType),
+			RefTable:  pf.RefTable,
+			ExtraTags: pf.ExtraTags,
+			// Index not preserved: the DB index already exists from its original migration.
 		})
 	}
 	out = append(out, add...)

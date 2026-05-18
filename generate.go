@@ -69,11 +69,14 @@ func genDomainSection(model string, userFields []Field) string {
 		if strings.HasPrefix(f.GoType, "*") {
 			jsonTag = f.DBName + ",omitempty"
 		}
+		tags := fmt.Sprintf(`db:"%s" json:"%s"`, f.DBName, jsonTag)
 		if f.RefTable != "" {
-			sb.WriteString(fmt.Sprintf("\t%-10s %-12s `db:\"%s\" json:\"%s\" ref:\"%s\"`\n", f.GoName, f.GoType, f.DBName, jsonTag, f.RefTable))
-		} else {
-			sb.WriteString(fmt.Sprintf("\t%-10s %-12s `db:\"%s\" json:\"%s\"`\n", f.GoName, f.GoType, f.DBName, jsonTag))
+			tags += fmt.Sprintf(` ref:"%s"`, f.RefTable)
 		}
+		if f.ExtraTags != "" {
+			tags += " " + f.ExtraTags
+		}
+		sb.WriteString(fmt.Sprintf("\t%-10s %-12s `%s`\n", f.GoName, f.GoType, tags))
 	}
 	sb.WriteString("\tCreatedAt time.Time `db:\"created_at\"  json:\"created_at\"`\n")
 	sb.WriteString("\tUpdatedAt time.Time `db:\"updated_at\"  json:\"updated_at\"`\n")
@@ -584,8 +587,18 @@ func genCreateMigration(model string, userFields []Field, driver string) string 
 	sb.WriteString(");\n")
 	if driver == "sqlite" {
 		sb.WriteString(fmt.Sprintf("CREATE INDEX %s_created_at_idx ON %s (created_at DESC);\n", table, table))
+		for _, f := range userFields {
+			if f.Index {
+				sb.WriteString(fmt.Sprintf("CREATE INDEX %s_%s_idx ON %s (%s);\n", table, f.DBName, table, f.DBName))
+			}
+		}
 	} else {
 		sb.WriteString(fmt.Sprintf("CREATE INDEX ON %s (created_at DESC);\n", table))
+		for _, f := range userFields {
+			if f.Index {
+				sb.WriteString(fmt.Sprintf("CREATE INDEX ON %s (%s);\n", table, f.DBName))
+			}
+		}
 	}
 	sb.WriteString("\n-- +goose Down\n")
 	sb.WriteString(fmt.Sprintf("DROP TABLE IF EXISTS %s;\n", table))
@@ -600,6 +613,11 @@ func genAlterMigration(model string, addFields []Field, driver string) string {
 		for _, f := range addFields {
 			sb.WriteString(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %-14s %s;\n", table, f.DBName, pgToSQLiteType(f.SQLType)))
 		}
+		for _, f := range addFields {
+			if f.Index {
+				sb.WriteString(fmt.Sprintf("CREATE INDEX %s_%s_idx ON %s (%s);\n", table, f.DBName, table, f.DBName))
+			}
+		}
 		sb.WriteString("\n-- +goose Down\n")
 		sb.WriteString("-- requires SQLite >= 3.35.0\n")
 		for _, f := range addFields {
@@ -608,6 +626,11 @@ func genAlterMigration(model string, addFields []Field, driver string) string {
 	} else {
 		for _, f := range addFields {
 			sb.WriteString(fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS %-14s %s;\n", table, f.DBName, f.SQLType))
+		}
+		for _, f := range addFields {
+			if f.Index {
+				sb.WriteString(fmt.Sprintf("CREATE INDEX ON %s (%s);\n", table, f.DBName))
+			}
 		}
 		sb.WriteString("\n-- +goose Down\n")
 		for _, f := range addFields {

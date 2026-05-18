@@ -68,11 +68,12 @@ func runRemove(args []string) error {
 			continue
 		}
 		remaining = append(remaining, Field{
-			GoName:   pf.GoName,
-			DBName:   pf.DBName,
-			GoType:   pf.GoType,
-			SQLType:  goTypeToSQLType(pf.GoType),
-			RefTable: pf.RefTable,
+			GoName:    pf.GoName,
+			DBName:    pf.DBName,
+			GoType:    pf.GoType,
+			SQLType:   goTypeToSQLType(pf.GoType),
+			RefTable:  pf.RefTable,
+			ExtraTags: pf.ExtraTags,
 		})
 	}
 

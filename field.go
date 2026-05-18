@@ -7,11 +7,13 @@ import (
 
 // Field holds parsed input like "name:string", "code:string{2}", "user_id:ref:users".
 type Field struct {
-	GoName   string // PascalCase Go identifier (e.g. FullName)
-	DBName   string // snake_case db tag      (e.g. full_name)
-	GoType   string // Go type string         (e.g. string, *int64, time.Time)
-	SQLType  string // Full SQL column def    (e.g. TEXT NOT NULL DEFAULT '')
-	RefTable string // set when type is ref:table (e.g. "users")
+	GoName    string // PascalCase Go identifier (e.g. FullName)
+	DBName    string // snake_case db tag        (e.g. full_name)
+	GoType    string // Go type string           (e.g. string, *int64, time.Time)
+	SQLType   string // Full SQL column def      (e.g. TEXT NOT NULL DEFAULT '')
+	RefTable  string // set when type is ref:table (e.g. "users")
+	Index     bool   // true → emit CREATE INDEX in migration
+	ExtraTags string // non-gen struct tags to preserve across regen (e.g. validate:"required")
 }
 
 type typeRow struct {
@@ -40,10 +42,32 @@ func parseField(raw string) (Field, error) {
 	name := parts[0]
 	typ := strings.ToLower(strings.TrimSpace(parts[1]))
 
+	// Extract modifiers: name:string[unique,index] → unique=true, index=true, typ="string"
+	var wantUnique, wantIndex bool
+	if i := strings.LastIndex(typ, "["); i != -1 && strings.HasSuffix(typ, "]") {
+		modStr := typ[i+1 : len(typ)-1]
+		typ = typ[:i]
+		for _, m := range strings.Split(modStr, ",") {
+			switch strings.TrimSpace(m) {
+			case "unique":
+				wantUnique = true
+			case "index":
+				wantIndex = true
+			case "":
+			default:
+				return Field{}, fmt.Errorf("unknown modifier %q in %q — valid: unique, index", strings.TrimSpace(m), raw)
+			}
+		}
+	}
+
 	nullable := strings.HasPrefix(typ, "*")
 	if nullable {
 		typ = typ[1:]
 	}
+
+	var f Field
+	f.GoName = toPascalCase(name)
+	f.DBName = toSnakeCase(name)
 
 	// ── ref:table ──────────────────────────────────────────────────────────
 	if strings.HasPrefix(typ, "ref:") {
@@ -51,65 +75,54 @@ func parseField(raw string) (Field, error) {
 		if refTable == "" {
 			return Field{}, fmt.Errorf("ref requires a table name: %q (e.g. user_id:ref:users)", raw)
 		}
-		sqlType := fmt.Sprintf("TEXT NOT NULL REFERENCES %s(id) ON DELETE CASCADE", refTable)
-		goType := "string"
+		f.RefTable = refTable
 		if nullable {
-			sqlType = fmt.Sprintf("TEXT REFERENCES %s(id) ON DELETE SET NULL", refTable)
-			goType = "*string"
+			f.GoType = "*string"
+			f.SQLType = fmt.Sprintf("TEXT REFERENCES %s(id) ON DELETE SET NULL", refTable)
+		} else {
+			f.GoType = "string"
+			f.SQLType = fmt.Sprintf("TEXT NOT NULL REFERENCES %s(id) ON DELETE CASCADE", refTable)
 		}
-		return Field{
-			GoName:   toPascalCase(name),
-			DBName:   toSnakeCase(name),
-			GoType:   goType,
-			SQLType:  sqlType,
-			RefTable: refTable,
-		}, nil
-	}
-
-	// ── string{n} / text{n} ───────────────────────────────────────────────
-	if i := strings.Index(typ, "{"); i != -1 {
+	} else if i := strings.Index(typ, "{"); i != -1 {
+		// ── string{n} / text{n} ───────────────────────────────────────────
 		j := strings.Index(typ, "}")
 		if j == -1 || j <= i {
 			return Field{}, fmt.Errorf("invalid type syntax %q: expected string{n}", typ)
 		}
-		n := typ[i+1 : j]
 		base := typ[:i]
 		if base != "string" && base != "text" && base != "varchar" {
 			return Field{}, fmt.Errorf("length modifier only valid for string/text/varchar, got %q", base)
 		}
-		sqlType := fmt.Sprintf("VARCHAR(%s) NOT NULL DEFAULT ''", n)
-		goType := "string"
+		n := typ[i+1 : j]
 		if nullable {
-			sqlType = fmt.Sprintf("VARCHAR(%s)", n)
-			goType = "*string"
+			f.GoType = "*string"
+			f.SQLType = fmt.Sprintf("VARCHAR(%s)", n)
+		} else {
+			f.GoType = "string"
+			f.SQLType = fmt.Sprintf("VARCHAR(%s) NOT NULL DEFAULT ''", n)
 		}
-		return Field{
-			GoName:  toPascalCase(name),
-			DBName:  toSnakeCase(name),
-			GoType:  goType,
-			SQLType: sqlType,
-		}, nil
+	} else {
+		// ── standard types ────────────────────────────────────────────────
+		row, ok := typeMappings[typ]
+		if !ok {
+			return Field{}, fmt.Errorf("unknown type %q — valid: string, int, float, bool, time, json, ref:<table>, string{n}", typ)
+		}
+		if nullable {
+			f.GoType = "*" + row.goType
+			f.SQLType = row.sqlNull
+		} else {
+			f.GoType = row.goType
+			f.SQLType = row.sqlFull
+		}
 	}
 
-	// ── standard types ────────────────────────────────────────────────────
-	row, ok := typeMappings[typ]
-	if !ok {
-		return Field{}, fmt.Errorf("unknown type %q — valid: string, int, float, bool, time, json, ref:<table>, string{n}", typ)
+	// Apply modifiers.
+	if wantUnique {
+		f.SQLType += " UNIQUE"
 	}
+	f.Index = wantIndex
 
-	goType := row.goType
-	sqlType := row.sqlFull
-	if nullable {
-		goType = "*" + goType
-		sqlType = row.sqlNull
-	}
-
-	return Field{
-		GoName:  toPascalCase(name),
-		DBName:  toSnakeCase(name),
-		GoType:  goType,
-		SQLType: sqlType,
-	}, nil
+	return f, nil
 }
 
 func parseFields(args []string) ([]Field, error) {

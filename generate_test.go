@@ -331,7 +331,7 @@ func TestGenPortSection(t *testing.T) {
 		"UpdateProduct(ctx context.Context, p domain.Product) (*domain.Product, error)",
 		"DeleteProduct(ctx context.Context, id string) error",
 		"ListProducts(ctx context.Context, limit, offset int) ([]domain.Product, error)",
-		"GetProduct(ctx context.Context, id string) (*domain.Product, error)",
+		"CRUDService[domain.Product]",
 	}
 	for _, s := range must {
 		if !strings.Contains(got, s) {
@@ -343,11 +343,11 @@ func TestGenPortSection(t *testing.T) {
 // ── genServiceSection ─────────────────────────────────────────────────────────
 
 func TestGenServiceSection(t *testing.T) {
-	got := genServiceSection("mymodule", "Product", nil)
+	got := genServiceSection("Product", nil)
 
 	must := []string{
-		"func (s *ProductService) UpdateProduct(ctx context.Context, p domain.Product) (*domain.Product, error)",
-		"func (s *ProductService) ListProducts(ctx context.Context, limit, offset int) ([]domain.Product, error)",
+		"func (s *ProductService) Update(ctx context.Context, p domain.Product) (*domain.Product, error)",
+		"func (s *ProductService) List(ctx context.Context, limit, offset int) ([]domain.Product, error)",
 		"return s.store.UpdateProduct(ctx, p)",
 		"return s.store.ListProducts(ctx, limit, offset)",
 	}
@@ -525,45 +525,16 @@ func TestGenHandlerSection(t *testing.T) {
 	got := genHandlerSection("mymodule", "Product")
 
 	must := []string{
-		// routes
-		`r.Get("/", h.handleList)`,
-		`r.Post("/", h.handleCreate)`,
-		`r.Get("/{id}", h.handleGet)`,
-		`r.Put("/{id}", h.handleUpdate)`,
-		`r.Delete("/{id}", h.handleDelete)`,
-		// handleList: pagination + 400 on bad params
-		"limit, offset := 100, 0",
-		`"invalid limit"`,
-		`"invalid offset"`,
-		"StatusBadRequest",
-		"ListProducts(r.Context(), limit, offset)",
-		// handleCreate: conflict → 409, mask others
-		"ErrProductConflict",
-		"StatusConflict",
-		// handleGet: ErrNotFound → 404, others → 500
-		"ErrProductNotFound",
-		"StatusNotFound",
-		"StatusInternalServerError",
-		// handleUpdate: uses returned value, ErrNotFound → 404
-		"UpdateProduct(r.Context(),",
-		"ErrProductNotFound",
-		// handleDelete: ErrNotFound → 404
-		"DeleteProduct(r.Context(), id)",
-		"StatusNoContent",
+		"type ProductHandler struct",
+		"*BaseHandler[domain.Product]",
+		"func NewProductHandler(svc ports.ProductService",
+		"NewBaseHandler[domain.Product]",
+		"func RegisterProductRoutes(h *ProductHandler)",
+		`r.Mount("/api/products", h.Routes())`,
 	}
 	for _, s := range must {
 		if !strings.Contains(got, s) {
 			t.Errorf("handler section missing %q\n---\n%s", s, got)
-		}
-	}
-
-	// must NOT leak raw errors to clients
-	for _, bad := range []string{
-		"err.Error(), http.StatusInternalServerError",
-		"err.Error(), http.StatusBadRequest",
-	} {
-		if strings.Contains(got, bad) {
-			t.Errorf("handler leaks raw error: found %q", bad)
 		}
 	}
 }
@@ -574,7 +545,7 @@ func TestGenWireSection(t *testing.T) {
 	got := genWireSection("Product")
 
 	must := []string{
-		"var ProductModule = fx.Options(",
+		`var ProductModule = fx.Module("product",`,
 		"fx.Provide(",
 		"ports.ProductStore",
 		"ports.ProductService",
@@ -638,5 +609,135 @@ func TestGenAlterMigration_SQLite(t *testing.T) {
 	}
 	if !strings.Contains(got, "ALTER TABLE products ADD COLUMN") {
 		t.Errorf("missing ALTER TABLE ADD COLUMN\n%s", got)
+	}
+}
+
+// ── modifiers ─────────────────────────────────────────────────────────────────
+
+func TestParseField_Unique(t *testing.T) {
+	f, err := parseField("email:string[unique]")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := Field{GoName: "Email", DBName: "email", GoType: "string", SQLType: "TEXT NOT NULL DEFAULT '' UNIQUE"}
+	if f != want {
+		t.Errorf("\n  got  %+v\n  want %+v", f, want)
+	}
+}
+
+func TestParseField_Index(t *testing.T) {
+	f, err := parseField("slug:string[index]")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := Field{GoName: "Slug", DBName: "slug", GoType: "string", SQLType: "TEXT NOT NULL DEFAULT ''", Index: true}
+	if f != want {
+		t.Errorf("\n  got  %+v\n  want %+v", f, want)
+	}
+}
+
+func TestParseField_UniqueAndIndex(t *testing.T) {
+	f, err := parseField("code:string{6}[unique,index]")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := Field{GoName: "Code", DBName: "code", GoType: "string", SQLType: "VARCHAR(6) NOT NULL DEFAULT '' UNIQUE", Index: true}
+	if f != want {
+		t.Errorf("\n  got  %+v\n  want %+v", f, want)
+	}
+}
+
+func TestParseField_UnknownModifier(t *testing.T) {
+	_, err := parseField("name:string[nope]")
+	if err == nil {
+		t.Error("expected error for unknown modifier")
+	}
+}
+
+func TestParseField_UniqueRef(t *testing.T) {
+	f, err := parseField("user_id:ref:users[unique]")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(f.SQLType, "UNIQUE") {
+		t.Errorf("SQLType missing UNIQUE: %s", f.SQLType)
+	}
+	if f.RefTable != "users" {
+		t.Errorf("RefTable = %q, want %q", f.RefTable, "users")
+	}
+}
+
+func TestGenCreateMigration_Index(t *testing.T) {
+	fields := []Field{
+		{GoName: "Email", DBName: "email", GoType: "string", SQLType: "TEXT NOT NULL DEFAULT '' UNIQUE", Index: true},
+	}
+	t.Run("pgx", func(t *testing.T) {
+		got := genCreateMigration("User", fields, "pgx")
+		if !strings.Contains(got, "CREATE INDEX ON users (email)") {
+			t.Errorf("missing CREATE INDEX for email\n%s", got)
+		}
+	})
+	t.Run("sqlite", func(t *testing.T) {
+		got := genCreateMigration("User", fields, "sqlite")
+		if !strings.Contains(got, "CREATE INDEX users_email_idx ON users (email)") {
+			t.Errorf("missing CREATE INDEX for email\n%s", got)
+		}
+	})
+}
+
+func TestGenAlterMigration_Index(t *testing.T) {
+	fields := []Field{
+		{GoName: "Slug", DBName: "slug", GoType: "string", SQLType: "TEXT NOT NULL DEFAULT ''", Index: true},
+	}
+	t.Run("pgx", func(t *testing.T) {
+		got := genAlterMigration("Post", fields, "pgx")
+		if !strings.Contains(got, "CREATE INDEX ON posts (slug)") {
+			t.Errorf("missing CREATE INDEX\n%s", got)
+		}
+	})
+	t.Run("sqlite", func(t *testing.T) {
+		got := genAlterMigration("Post", fields, "sqlite")
+		if !strings.Contains(got, "CREATE INDEX posts_slug_idx ON posts (slug)") {
+			t.Errorf("missing CREATE INDEX\n%s", got)
+		}
+	})
+}
+
+// ── ExtraTags preservation ────────────────────────────────────────────────────
+
+func TestExtractExtraTags(t *testing.T) {
+	cases := []struct {
+		tagLit string
+		want   string
+	}{
+		{"`db:\"name\" json:\"name\"`", ""},
+		{"`db:\"name\" json:\"name\" validate:\"required\"`", `validate:"required"`},
+		{"`db:\"name\" json:\"name\" ref:\"users\" validate:\"required,min=1\"`", `validate:"required,min=1"`},
+		{"`validate:\"required\" db:\"name\" json:\"name\"`", `validate:"required"`},
+	}
+	for _, c := range cases {
+		if got := extractExtraTags(c.tagLit); got != c.want {
+			t.Errorf("extractExtraTags(%s) = %q, want %q", c.tagLit, got, c.want)
+		}
+	}
+}
+
+func TestGenDomainSection_ExtraTags(t *testing.T) {
+	fields := []Field{
+		{GoName: "Email", DBName: "email", GoType: "string", SQLType: "TEXT NOT NULL DEFAULT ''", ExtraTags: `validate:"required,email"`},
+		{GoName: "Name", DBName: "name", GoType: "string", SQLType: "TEXT NOT NULL DEFAULT ''"},
+	}
+	got := genDomainSection("User", fields)
+	if !strings.Contains(got, `validate:"required,email"`) {
+		t.Errorf("domain section missing ExtraTags\n%s", got)
+	}
+	// Name has no extra tags — no validate key should appear on that line
+	for _, line := range strings.Split(got, "\n") {
+		if strings.Contains(line, "DBName") {
+			continue
+		}
+		if strings.Contains(line, `db:"name"`) && strings.Contains(line, "validate:") {
+			t.Errorf("name field should not have validate tag: %s", line)
+		}
 	}
 }
