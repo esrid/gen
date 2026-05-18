@@ -231,7 +231,7 @@ func TestGenCreateMigration_Pgx(t *testing.T) {
 		"-- +goose Up",
 		"-- +goose Down",
 		"CREATE TABLE IF NOT EXISTS products",
-		"UUID        PRIMARY KEY DEFAULT uuid7()",
+		"UUID        PRIMARY KEY DEFAULT uuidv7()",
 		// full column lines — avoids bare "name" matching unrelated context
 		"name           TEXT NOT NULL DEFAULT ''",
 		"price          DOUBLE PRECISION NOT NULL DEFAULT 0",
@@ -261,7 +261,7 @@ func TestGenCreateMigration_SQLite(t *testing.T) {
 			t.Errorf("sqlite migration missing %q\n---\n%s", s, got)
 		}
 	}
-	for _, bad := range []string{"UUID", "uuid7()", "TIMESTAMPTZ", "NOW()"} {
+	for _, bad := range []string{"UUID", "uuidv7()", "TIMESTAMPTZ", "NOW()"} {
 		if strings.Contains(got, bad) {
 			t.Errorf("sqlite migration contains Postgres syntax %q", bad)
 		}
@@ -270,7 +270,7 @@ func TestGenCreateMigration_SQLite(t *testing.T) {
 
 func TestGenCreateMigration_NoFields(t *testing.T) {
 	got := genCreateMigration("Event", nil, "pgx")
-	if !strings.Contains(got, "UUID        PRIMARY KEY DEFAULT uuid7()") {
+	if !strings.Contains(got, "UUID        PRIMARY KEY DEFAULT uuidv7()") {
 		t.Errorf("no-field migration missing UUID PK\n%s", got)
 	}
 	if strings.Contains(got, "RETURNING") {

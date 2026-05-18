@@ -60,7 +60,7 @@ Examples:
   gen method Order ListByUser "userID:string -> []Order,error"
 
 Notes:
-  - Auto-adds: id (UUID uuid7), created_at, updated_at
+  - Auto-adds: id (UUID uuidv7), created_at, updated_at
   - Code wrapped in // gen:begin <Model> / // gen:end <Model> — safe to add code outside
   - gen add only modifies marked sections + creates ALTER TABLE migration
   - gen destroy asks confirmation, skips files with user code outside markers
