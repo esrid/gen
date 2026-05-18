@@ -107,7 +107,7 @@ func mergeUserFields(parsed []ParsedField, add []Field) []Field {
 			GoName:    pf.GoName,
 			DBName:    pf.DBName,
 			GoType:    pf.GoType,
-			SQLType:   goTypeToSQLType(pf.GoType),
+			SQLType:   goTypeToSQLType(pf.GoType, pf.RefTable),
 			RefTable:  pf.RefTable,
 			ExtraTags: pf.ExtraTags,
 			// Index not preserved: the DB index already exists from its original migration.
@@ -171,7 +171,15 @@ func insertBeforeStructClose(content, model string, fields []Field) (string, err
 	}
 	var ins strings.Builder
 	for _, f := range fields {
-		ins.WriteString(fmt.Sprintf("\t%s %s `db:\"%s\"`\n", f.GoName, f.GoType, f.DBName))
+		jsonTag := f.DBName
+		if strings.HasPrefix(f.GoType, "*") {
+			jsonTag = f.DBName + ",omitempty"
+		}
+		tags := fmt.Sprintf(`db:"%s" json:"%s"`, f.DBName, jsonTag)
+		if f.RefTable != "" {
+			tags += fmt.Sprintf(` ref:"%s"`, f.RefTable)
+		}
+		ins.WriteString(fmt.Sprintf("\t%s %s `%s`\n", f.GoName, f.GoType, tags))
 	}
 	return content[:closeAt] + ins.String() + content[closeAt:], nil
 }

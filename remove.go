@@ -71,7 +71,7 @@ func runRemove(args []string) error {
 			GoName:    pf.GoName,
 			DBName:    pf.DBName,
 			GoType:    pf.GoType,
-			SQLType:   goTypeToSQLType(pf.GoType),
+			SQLType:   goTypeToSQLType(pf.GoType, pf.RefTable),
 			RefTable:  pf.RefTable,
 			ExtraTags: pf.ExtraTags,
 		})
@@ -127,7 +127,7 @@ func genDropMigration(model string, dropped []ParsedField, driver string) string
 		sb.WriteString("\n-- +goose Down\n")
 		for _, pf := range dropped {
 			sb.WriteString(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %-14s %s;\n",
-				table, pf.DBName, goTypeToSQLType(pf.GoType)))
+				table, pf.DBName, pgToSQLiteType(goTypeToSQLType(pf.GoType, pf.RefTable))))
 		}
 	} else {
 		for _, pf := range dropped {
@@ -136,7 +136,7 @@ func genDropMigration(model string, dropped []ParsedField, driver string) string
 		sb.WriteString("\n-- +goose Down\n")
 		for _, pf := range dropped {
 			sb.WriteString(fmt.Sprintf("ALTER TABLE %s ADD COLUMN IF NOT EXISTS %-14s %s;\n",
-				table, pf.DBName, goTypeToSQLType(pf.GoType)))
+				table, pf.DBName, goTypeToSQLType(pf.GoType, pf.RefTable)))
 		}
 	}
 	return sb.String()

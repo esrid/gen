@@ -78,10 +78,10 @@ func parseField(raw string) (Field, error) {
 		f.RefTable = refTable
 		if nullable {
 			f.GoType = "*string"
-			f.SQLType = fmt.Sprintf("TEXT REFERENCES %s(id) ON DELETE SET NULL", refTable)
+			f.SQLType = fmt.Sprintf("UUID REFERENCES %s(id) ON DELETE SET NULL", refTable)
 		} else {
 			f.GoType = "string"
-			f.SQLType = fmt.Sprintf("TEXT NOT NULL REFERENCES %s(id) ON DELETE CASCADE", refTable)
+			f.SQLType = fmt.Sprintf("UUID NOT NULL REFERENCES %s(id) ON DELETE CASCADE", refTable)
 		}
 	} else if i := strings.Index(typ, "{"); i != -1 {
 		// ── string{n} / text{n} ───────────────────────────────────────────
@@ -147,9 +147,16 @@ func isAutoField(dbName string) bool {
 }
 
 // goTypeToSQLType converts a parsed Go type string back to a SQL type string (best-effort).
-// Used when re-reading existing structs for gen add — ref tables are lost here (falls back to TEXT).
-func goTypeToSQLType(goType string) string {
+func goTypeToSQLType(goType, refTable string) string {
 	nullable := strings.HasPrefix(goType, "*")
+
+	if refTable != "" {
+		if nullable {
+			return fmt.Sprintf("UUID REFERENCES %s(id) ON DELETE SET NULL", refTable)
+		}
+		return fmt.Sprintf("UUID NOT NULL REFERENCES %s(id) ON DELETE CASCADE", refTable)
+	}
+
 	base := strings.TrimPrefix(goType, "*")
 	var sqlBase string
 	switch base {

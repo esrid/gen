@@ -120,11 +120,11 @@ func TestParseField(t *testing.T) {
 		},
 		{
 			raw:  "user_id:ref:users",
-			want: Field{GoName: "UserID", DBName: "user_id", GoType: "string", SQLType: "TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE", RefTable: "users"},
+			want: Field{GoName: "UserID", DBName: "user_id", GoType: "string", SQLType: "UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE", RefTable: "users"},
 		},
 		{
 			raw:  "owner:*ref:accounts",
-			want: Field{GoName: "Owner", DBName: "owner", GoType: "*string", SQLType: "TEXT REFERENCES accounts(id) ON DELETE SET NULL", RefTable: "accounts"},
+			want: Field{GoName: "Owner", DBName: "owner", GoType: "*string", SQLType: "UUID REFERENCES accounts(id) ON DELETE SET NULL", RefTable: "accounts"},
 		},
 		{raw: "nocodon", wantErr: true},
 		{raw: ":string", wantErr: true},

@@ -416,6 +416,8 @@ var sqliteTypeReplacer = strings.NewReplacer(
 	"BOOLEAN NOT NULL DEFAULT FALSE", "INTEGER NOT NULL DEFAULT 0",
 	"TIMESTAMPTZ NOT NULL DEFAULT NOW()", "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP",
 	"JSONB NOT NULL DEFAULT '{}'", "TEXT NOT NULL DEFAULT '{}'",
+	"UUID NOT NULL REFERENCES", "TEXT NOT NULL REFERENCES",
+	"UUID REFERENCES", "TEXT REFERENCES",
 	"BIGINT", "INTEGER",
 	"DOUBLE PRECISION", "REAL",
 	"BOOLEAN", "INTEGER",
@@ -611,7 +613,13 @@ func genAlterMigration(model string, addFields []Field, driver string) string {
 	sb.WriteString("-- +goose Up\n")
 	if driver == "sqlite" {
 		for _, f := range addFields {
-			sb.WriteString(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %-14s %s;\n", table, f.DBName, pgToSQLiteType(f.SQLType)))
+			sqlType := pgToSQLiteType(f.SQLType)
+			isUnique := strings.Contains(sqlType, " UNIQUE")
+			sqlType = strings.ReplaceAll(sqlType, " UNIQUE", "")
+			sb.WriteString(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %-14s %s;\n", table, f.DBName, sqlType))
+			if isUnique {
+				sb.WriteString(fmt.Sprintf("CREATE UNIQUE INDEX %s_%s_unique_idx ON %s (%s);\n", table, f.DBName, table, f.DBName))
+			}
 		}
 		for _, f := range addFields {
 			if f.Index {
